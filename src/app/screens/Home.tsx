@@ -1,10 +1,11 @@
 import { useT } from '../i18n';
 
-export function Home({ go, unfiledCount = 0 }: { go(path: string): void; unfiledCount?: number }) {
+export function Home({ go, unfiledCount = 0, backupDue = false }: { go(path: string): void; unfiledCount?: number; backupDue?: boolean }) {
   const { t, lang, setLang } = useT();
   return (
     <main className="screen home">
       <h1>{t('appTitle')}</h1>
+      {backupDue && <button className="banner" onClick={() => go('/backup')}>{t('backupReminder')}</button>}
       <button className="big primary" onClick={() => go('/check')}>{t('homeCheck')}</button>
       <button className="big" onClick={() => go('/page')}>{t('homeCapture')}</button>
       <button className="big" onClick={() => go('/unfiled')}>
