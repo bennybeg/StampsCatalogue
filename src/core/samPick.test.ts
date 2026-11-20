@@ -82,4 +82,17 @@ describe('stamp border preference', () => {
     expect(bestPointBox([m(pair, 0.9), m(stamp, 0.91), m(design, 1)], 1000, 1000)).toEqual(stamp);
     expect(bestPointBox([m(pair, 0.9), m(design, 1)], 1000, 1000)).toEqual(design);
   });
+
+  it('mergeDetections: SAM stamps replace a classical blob of touching stamps', () => {
+    const blob = { box: { x: 0, y: 0, w: 440, h: 280 }, kind: 'single' as const, inner: [], unresolved: true };
+    const out = mergeDetections([blob], [{ x: 0, y: 0, w: 220, h: 280 }, { x: 220, y: 0, w: 220, h: 280 }]);
+    expect(out.map((d) => d.box)).toEqual([{ x: 0, y: 0, w: 220, h: 280 }, { x: 220, y: 0, w: 220, h: 280 }]);
+    expect(out.every((d) => !d.unresolved)).toBe(true);
+  });
+
+  it('a smaller neighbour is not mistaken for a stamp border (unequal pair)', () => {
+    const A = { x: 0, y: 0, w: 120, h: 150 }, B = { x: 120, y: 0, w: 90, h: 150 }, pairAB = { x: 0, y: 0, w: 210, h: 150 };
+    expect(pickStamps([{ ...A, score: 0.95 }, { ...B, score: 0.94 }, { ...pairAB, score: 0.9 }])).toEqual(expect.arrayContaining([A, B]));
+    expect(bestPointBox([{ box: A, fill: 0.97, iou: 0.95 }, { box: pairAB, fill: 0.97, iou: 0.9 }], 1000, 1000)).toEqual(A);
+  });
 });

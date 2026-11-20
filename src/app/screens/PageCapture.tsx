@@ -61,11 +61,16 @@ export function PageCapture({ go }: { go(path: string): void }) {
     }
   };
 
+  const snapping = useRef(false); // taps while one is being outlined are ignored
+  const [snapBusy, setSnapBusy] = useState(false);
   const onTapEmpty = async (x: number, y: number) => {
-    if (!photo) return;
+    if (!photo || snapping.current) return;
+    snapping.current = true; setSnapBusy(true);
+    try {
     // A snug frame if the stamp's edges are found, otherwise a stamp-sized frame to adjust by hand.
     const b = await svc.recognizer.snap(photo, x, y).catch(() => null);
     addBox(b ?? defaultBoxAt(x, y, boxes, photo.width, photo.height));
+    } finally { snapping.current = false; setSnapBusy(false); }
   };
 
   const finish = async (cands: CandidateWithCrops[], proposals: Proposal[]) => {
@@ -136,7 +141,7 @@ export function PageCapture({ go }: { go(path: string): void }) {
           {boxes.length === 0 && <p>{t('noStampsFound')}</p>}
           <BoxEditor photoUrl={photoUrl} width={photo.width} height={photo.height} boxes={boxes} mode="edit" onChange={setBoxes} onTapEmpty={onTapEmpty} selectKey={selectKey} />
           <button className="big" onClick={() => addBox(defaultBoxAt(photo.width / 2, photo.height / 2, boxes, photo.width, photo.height))}>{t('addFrame')}</button>
-          <p className="muted">{t('dragFrameHint')}</p>
+          <p className="muted">{snapBusy ? t('working') : t('dragFrameHint')}</p>
           {hasUnresolved && <p className="banner">{t('splitFirst')}</p>}
           <button className="big primary" disabled={hasUnresolved || boxes.length === 0} onClick={onSave}>{t('save')}</button>
         </>

@@ -56,9 +56,19 @@ export function isEmptyStrip(img: RgbaImage, b: Box): boolean {
  * roughly 7–15% per side); a pair of stamps is ≥ 2× one stamp.
  */
 const BORDER_GROWTH_MIN = 1.15, BORDER_GROWTH_MAX = 1.85;
+/**
+ * A paper border surrounds the picture on all sides, roughly evenly; a neighbouring stamp sits on one
+ * side only. So: each side margin ≥ 2% of the outer box, and opposite margins within 3:1.
+ */
+const centred = (inner: Box, outer: Box) => {
+  const l = inner.x - outer.x, r = outer.x + outer.w - (inner.x + inner.w);
+  const t = inner.y - outer.y, b = outer.y + outer.h - (inner.y + inner.h);
+  const even = (a: number, c: number, size: number) => Math.min(a, c) >= 0.02 * size && Math.max(a, c) <= 3 * Math.min(a, c);
+  return even(l, r, outer.w) && even(t, b, outer.h);
+};
 const enclosedBy = (inner: Box, outer: Box) => {
   const r = (outer.w * outer.h) / (inner.w * inner.h);
-  return r >= BORDER_GROWTH_MIN && r <= BORDER_GROWTH_MAX && insideOf(inner, outer) >= 0.9;
+  return r >= BORDER_GROWTH_MIN && r <= BORDER_GROWTH_MAX && insideOf(inner, outer) >= 0.9 && centred(inner, outer);
 };
 
 /**
@@ -86,9 +96,18 @@ export function bestPointBox(masks: (MaskInfo & { iou: number })[], imgW: number
   return (withBorder ?? ok[0]).box;
 }
 
-/** Classical detections stay as they are; SAM boxes not already covered by one are added as singles. */
+/**
+ * Classical detections stay as they are, except a "single" or unresolved box that SAM split into two or
+ * more stamps (touching stamps — what SAM is for): those stamps replace it. Other SAM boxes not already
+ * covered by a classical item are added as singles.
+ */
 export function mergeDetections(classical: Detected[], sam: Box[]): Detected[] {
-  const out = [...classical];
+  const out: Detected[] = [];
+  for (const d of classical) {
+    const parts = sam.filter((b) => insideOf(b, d.box) > 0.85);
+    if ((d.unresolved || d.kind === 'single') && parts.length >= 2) out.push(...parts.map((b) => ({ box: b, kind: 'single' as const, inner: [] })));
+    else out.push(d);
+  }
   for (const b of sam) {
     if (out.some((d) => iou(d.box, b) > 0.5 || insideOf(b, d.box) > 0.85)) continue;
     out.push({ box: b, kind: 'single', inner: [] });

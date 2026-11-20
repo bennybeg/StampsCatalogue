@@ -125,8 +125,13 @@ export function Check({ go }: { go(path: string): void }) {
           <BoxEditor photoUrl={step.url} width={step.photo.width} height={step.photo.height} boxes={step.boxes} mode="pick"
             onPick={(b) => search(step.photo, b.box)}
             onTapEmpty={async (x, y) => {
-              const b = await svc.recognizer.snap(step.photo, x, y).catch(() => null);
-              search(step.photo, b ?? defaultBoxAt(x, y, step.boxes, step.photo.width, step.photo.height));
+              if (busyRef.current) return; // one tap at a time
+              busyRef.current = true;
+              setStep({ s: 'working' });
+              try {
+                const b = await svc.recognizer.snap(step.photo, x, y).catch(() => null);
+                await search(step.photo, b ?? defaultBoxAt(x, y, step.boxes, step.photo.width, step.photo.height));
+              } finally { busyRef.current = false; }
             }} />
         </>
       )}

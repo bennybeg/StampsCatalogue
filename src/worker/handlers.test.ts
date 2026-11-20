@@ -37,4 +37,37 @@ describe('worker handlers', () => {
     const h = deps({ samFindStamps: async () => [{ x: 50, y: 50, w: 30, h: 40 }] });
     expect(await h.detect(dark)).toEqual([]);
   });
+
+  it('stops an older page search when a newer one starts', async () => {
+    const stops: boolean[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let n = 0;
+    const h = deps({
+      samFindStamps: async (_i, _p, shouldStop) => {
+        if (++n === 1) { await gate; stops.push(shouldStop!()); } else stops.push(shouldStop!());
+        return [];
+      },
+    });
+    const first = h.detect(img);
+    const second = h.detect(img);
+    await second;
+    release();
+    await first;
+    expect(stops).toEqual([false, true]);
+  });
+
+  it('filters empty album strip in the quick club detector too', async () => {
+    const dark = { width: 100, height: 100, data: new Uint8ClampedArray(40000).map((_, i) => (i % 4 === 3 ? 255 : 50)) };
+    expect(await deps({}).quickDetect(dark)).toEqual([]);
+  });
+
+  it('on an engine crash still hands back the classical stamps, flags it fatal, and stops using SlimSAM', async () => {
+    let samCalls = 0;
+    const h = deps({ samFindStamps: async () => { samCalls++; throw new RangeError('Array buffer allocation failed'); } });
+    const err = await h.detect(img).then(() => null, (e) => e);
+    expect(err).toMatchObject({ fatal: true, fallback: classical });
+    expect(await h.detect(img)).toEqual(classical);
+    expect(samCalls).toBe(1);
+  });
 });

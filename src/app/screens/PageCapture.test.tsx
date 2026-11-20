@@ -130,4 +130,31 @@ describe('PageCapture', () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(document.querySelectorAll('.box')).toHaveLength(1);
   });
+
+  it('ignores extra taps while a tap is still being outlined', async () => {
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:photo', revokeObjectURL: () => {} }));
+    const db = await openStampDb('capture5');
+    let snaps = 0;
+    const recognizer: Recognizer = {
+      detect: async () => [{ box: { x: 5, y: 5, w: 30, h: 40 }, kind: 'single', inner: [] }],
+      snap: async () => { snaps++; await new Promise((r) => setTimeout(r, 30)); return { x: 60, y: 60, w: 20, h: 20 }; },
+      describe: async () => ({ embedding: new Float32Array(4), color: new Float32Array(72) }),
+      warmUp: async () => {},
+    };
+    const services: Services = { getDb: async () => db, recognizer,
+      decode: async () => ({ width: 100, height: 100, data: new Uint8ClampedArray(40000) }), encode: async () => new Blob(['jpg']) };
+    render(<I18nProvider><ServicesProvider value={services}><PageCapture go={() => {}} /></ServicesProvider></I18nProvider>);
+    fireEvent.change(screen.getByLabelText(ru.albumLabel), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText(ru.pageLabel), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText(ru.takePhoto), { target: { files: [new File(['x'], 'p.jpg')] } });
+    await waitFor(() => expect(screen.getByTestId('box-0')).toBeTruthy());
+    const surface = screen.getByTestId('photo-surface');
+    fireEvent.click(surface, { clientX: 70, clientY: 70 });
+    fireEvent.click(surface, { clientX: 70, clientY: 70 });
+    fireEvent.click(surface, { clientX: 70, clientY: 70 });
+    await waitFor(() => expect(document.querySelectorAll('.box')).toHaveLength(2));
+    await new Promise((r) => setTimeout(r, 60));
+    expect(document.querySelectorAll('.box')).toHaveLength(2);
+    expect(snaps).toBe(1);
+  });
 });

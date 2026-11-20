@@ -1,12 +1,19 @@
 import { AutoProcessor, RawImage, SamModel, Tensor } from '@huggingface/transformers';
 import { resizeTo, type Box, type RgbaImage } from './image';
 import { bestPointBox, isEmptyStrip, isStampLike, maskBox, pickStamps, type MaskInfo, type SamCand } from './samPick';
+import { cachedPrepare } from './samCache';
 
 export const SAM_MODEL = 'Xenova/slimsam-77-uniform';
 const SIDE = 1024;
 /** Prompt grid spacing, in SAM's 1024-px input space. */
 const GRID = 44;
-const BATCH = 64;
+/** Share of the progress bar for the image embedding. */
+const EMBED_SHARE = 0.25;
+/**
+ * Points per decoder run. The decoder upsamples a 32×256×256 map per point (~8 MB), so 64 points
+ * needed ~1.7 GB extra; 8 keeps the peak small enough for a phone at about the same speed.
+ */
+const BATCH = 8;
 
 export type PointMasks = (MaskInfo & { iou: number })[];
 export interface Prepared { points(pts: [number, number][]): Promise<PointMasks[]> }
@@ -43,6 +50,8 @@ async function load(): Promise<Segmenter> {
             const res = await model({ ...emb, input_points, input_labels });
             const masks = res.pred_masks.data as Float32Array;
             const ious = res.iou_scores.data as Float32Array;
+            // Free decoder outputs promptly (WASM memory does not shrink on its own).
+            for (const t of Object.values(res)) (t as { dispose?(): void }).dispose?.();
             for (let n = 0; n < chunk.length; n++) {
               const per: PointMasks = [];
               for (let m = 0; m < 3; m++) {
@@ -68,8 +77,10 @@ function roundBox(b: Box, img: RgbaImage): Box {
  * Every stamp-like object on a page: prompt a grid of points (skipping points inside stamps already
  * found with high confidence), keep stamp-like masks, drop empty strip, rows and stamp parts.
  */
-export async function samFindStamps(img: RgbaImage, onProgress?: (f: number) => void): Promise<Box[]> {
-  const prepared = await (await createSegmenter()).prepare(img);
+export async function samFindStamps(img: RgbaImage, onProgress?: (f: number) => void, shouldStop?: () => boolean): Promise<Box[]> {
+  const segmenter = await createSegmenter();
+  const prepared = await cachedPrepare(img, (i) => segmenter.prepare(i));
+  onProgress?.(EMBED_SHARE); // the embedding is the longest single step
   const step = (GRID * Math.max(img.width, img.height)) / SIDE;
   const pts: [number, number][] = [];
   for (let y = step / 2; y < img.height; y += step) for (let x = step / 2; x < img.width; x += step) pts.push([x, y]);
@@ -77,6 +88,7 @@ export async function samFindStamps(img: RgbaImage, onProgress?: (f: number) => 
   const cands: SamCand[] = [];
   const sure: Box[] = [];
   for (let b = 0; b < pts.length; b += BATCH) {
+    if (shouldStop?.()) throw new Error('superseded');
     const chunk = pts.slice(b, b + BATCH).filter(([x, y]) => !sure.some((s) => x > s.x && x < s.x + s.w && y > s.y && y < s.y + s.h));
     if (chunk.length) {
       const res = await prepared.points(chunk);
@@ -87,22 +99,15 @@ export async function samFindStamps(img: RgbaImage, onProgress?: (f: number) => 
           if (m.iou > 0.95 && m.fill > 0.9) sure.push(m.box);
         }
     }
-    onProgress?.(Math.min(1, (b + BATCH) / pts.length));
+    onProgress?.(EMBED_SHARE + (1 - EMBED_SHARE) * Math.min(1, (b + BATCH) / pts.length));
   }
   return pickStamps(cands);
 }
 
-let lastTap: { key: string; prepared: Prepared } | null = null;
-const imageKey = (img: RgbaImage) => {
-  let h = img.width * 31 + img.height;
-  for (let i = 0; i < img.data.length; i += 4099) h = (h * 33 + img.data[i]) | 0;
-  return String(h);
-};
-
-/** The stamp under a tapped point (SAM's smallest stamp-like mask), or null. Reuses the embedding for repeated taps. */
+/** The stamp under a tapped point, or null. Shares the page search's embedding of the same photo. */
 export async function samBoxAt(img: RgbaImage, x: number, y: number): Promise<Box | null> {
-  const key = imageKey(img);
-  if (lastTap?.key !== key) lastTap = { key, prepared: await (await createSegmenter()).prepare(img) };
-  const [masks] = await lastTap.prepared.points([[x, y]]);
+  const segmenter = await createSegmenter();
+  const prepared = await cachedPrepare(img, (i) => segmenter.prepare(i));
+  const [masks] = await prepared.points([[x, y]]);
   return bestPointBox(masks, img.width, img.height);
 }
