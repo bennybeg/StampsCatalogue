@@ -42,3 +42,40 @@ export function drawStamp(img: RgbaImage, box: Box, design: Rgb = [40, 70, 160],
 }
 
 export const PAGE_BG: Rgb = [55, 55, 58];
+
+/** A 224×280 synthetic stamp with a recognisable motif. */
+export function stampArt(motif: 'planet' | 'rocket'): RgbaImage {
+  const w = 224, h = 280;
+  const img = blankImage(w, h, [236, 230, 214]);
+  drawRect(img, { x: 20, y: 20, w: w - 40, h: h - 40 }, motif === 'planet' ? [20, 25, 70] : [120, 170, 220]);
+  for (let y = 20; y < h - 20; y++)
+    for (let x = 20; x < w - 20; x++) {
+      const i = (y * w + x) * 4;
+      let rgb: Rgb | null = null;
+      if (motif === 'planet') {
+        const d = Math.hypot(x - 112, y - 140);
+        if (d < 55) rgb = [210, 120, 50];
+        else if (Math.abs(y - 140 - (x - 112) * 0.3) < 4 && d < 95) rgb = [230, 210, 160];
+      } else {
+        if (Math.abs(x - 112) < 18 && y > 70 && y < 210) rgb = [235, 235, 240];
+        else if (y >= 40 && y <= 70 && Math.abs(x - 112) < (y - 40) * 0.6) rgb = [200, 40, 40];
+        else if (y > 180 && y < 215 && Math.abs(x - 112) < 40 && Math.abs(x - 112) > 18) rgb = [200, 40, 40];
+      }
+      if (rgb) { img.data[i] = rgb[0]; img.data[i + 1] = rgb[1]; img.data[i + 2] = rgb[2]; }
+    }
+  return img;
+}
+
+/** Copy of `img` with a dark "postmark" blob over `fraction` of its area, in the lower-left. */
+export function withPostmark(img: RgbaImage, fraction: number): RgbaImage {
+  const out = { ...img, data: new Uint8ClampedArray(img.data) };
+  const r = Math.sqrt((fraction * img.width * img.height) / Math.PI);
+  const cx = img.width * 0.3, cy = img.height * 0.7;
+  for (let y = 0; y < img.height; y++)
+    for (let x = 0; x < img.width; x++)
+      if (Math.hypot(x - cx, y - cy) < r && (Math.floor(y / 6) % 2 === 0 || Math.hypot(x - cx, y - cy) > r - 5)) {
+        const i = (y * img.width + x) * 4;
+        out.data[i] = out.data[i + 1] = out.data[i + 2] = 25;
+      }
+  return out;
+}
