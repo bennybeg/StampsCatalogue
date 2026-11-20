@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useT } from './i18n';
 import { I18nProvider } from './i18n';
 import { useRoute } from './router';
 import { ServicesProvider, useServices, type Services } from './services';
@@ -67,11 +68,36 @@ function Screens() {
   }
 }
 
+/**
+ * Loads OpenCV and the model in the background so the first check is fast. The first time this
+ * downloads ~24 MB; afterwards it comes from the phone's cache. Failure shows a retry banner.
+ */
+function EngineStatus() {
+  const { t } = useT();
+  const svc = useServices();
+  const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const load = useCallback(() => {
+    setState('loading');
+    // new Promise also catches a synchronous throw (e.g. no Worker support).
+    new Promise<void>((resolve) => resolve(svc.recognizer?.warmUp?.())).then(() => setState('ready'), () => setState('failed'));
+  }, [svc]);
+  useEffect(load, [load]);
+  if (state === 'ready') return null;
+  if (state === 'loading') return <p className="engine muted">{t('loadingEngine')}</p>;
+  return (
+    <div className="engine banner row">
+      <span>{t('loadFailed')}</span>
+      <button onClick={load}>{t('retry')}</button>
+    </div>
+  );
+}
+
 export function App({ services }: { services?: Services }) {
   const svc = useMemo(() => services ?? realServices(), [services]);
   return (
     <I18nProvider>
       <ServicesProvider value={svc}>
+        <EngineStatus />
         <Screens />
       </ServicesProvider>
     </I18nProvider>

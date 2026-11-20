@@ -75,4 +75,7 @@ export const en: Record<keyof typeof ru, string> = {
   backupLast: 'Last backup: {date}',
   backupNever: 'No backup yet',
   storageUsed: 'Used on this phone: {mb} MB',
+  loadingEngine: 'Loading stamp recognition… (the first time needs internet)',
+  loadFailed: 'Could not load stamp recognition. Check the internet connection.',
+  retry: 'Retry',
 };
