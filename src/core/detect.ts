@@ -1,5 +1,5 @@
 import { getCv, type CV } from './cv';
-import { resizeTo, type Box, type RgbaImage } from './image';
+import { crop, resizeTo, type Box, type RgbaImage } from './image';
 
 export type ItemKind = 'single' | 'block' | 'cover';
 export type Detected = { box: Box; kind: ItemKind; inner: Box[] };
@@ -21,8 +21,84 @@ export async function detectItems(img: RgbaImage, opts: { workingMaxSide?: numbe
   const cv = await getCv();
   const { image: work, scale } = resizeTo(img, opts.workingMaxSide ?? 1600);
   const boxes = findRectangles(cv, work, MIN_AREA_FRACTION).map((b) => toOriginal(b, scale, img));
-  const kept = dropContained(boxes);
-  return sortReadingOrder(classify(kept));
+  const items = classify(dropContained(boxes));
+  for (const item of items) {
+    const { image: sub, scale: s } = resizeTo(crop(img, item.box), 800);
+    item.inner = (await detectInner(sub, item.kind)).map((b) => toOriginal(b, s, { width: item.box.w, height: item.box.h }));
+    if (item.kind === 'single' && item.inner.length >= 2) item.kind = 'block';
+  }
+  return sortReadingOrder(items);
+}
+
+/** Paper colour difference (0–255) above which a pixel counts as part of a stamp design. */
+const DESIGN_CONTRAST = 40;
+/** A column/row is a gutter candidate when less than this fraction of it is design. */
+const GUTTER_MAX_DESIGN = 0.15;
+/** On covers, stamps' white margins blend into the envelope; grow found designs by this × shorter side. */
+const COVER_MARGIN = 0.1;
+
+/**
+ * Stamps inside one item, in coordinates relative to the item.
+ * Blocks/singles: split along perforation gutters (≥ 2 boxes for a block, [] for a single).
+ * Covers: rectangles that stand out from the envelope, upper-right ones first.
+ */
+export async function detectInner(item: RgbaImage, kind: ItemKind = 'single'): Promise<Box[]> {
+  if (kind === 'cover') {
+    const cv = await getCv();
+    const found = findRectangles(cv, item, 0.005)
+      .filter((b) => b.w * b.h < 0.8 * item.width * item.height)
+      .map((b) => {
+        const m = Math.round(COVER_MARGIN * Math.min(b.w, b.h));
+        const x0 = Math.max(0, b.x - m), y0 = Math.max(0, b.y - m);
+        return { x: x0, y: y0, w: Math.min(item.width, b.x + b.w + m) - x0, h: Math.min(item.height, b.y + b.h + m) - y0 };
+      });
+    const upperRight = (b: Box) => b.x + b.w / 2 >= item.width / 2 && b.y + b.h / 2 <= item.height / 2;
+    return found.sort((a, b) => Number(upperRight(b)) - Number(upperRight(a)) || b.w * b.h - a.w * a.h);
+  }
+  return gridSplit(item);
+}
+
+function gridSplit(img: RgbaImage): Box[] {
+  const paper = backgroundColour(img);
+  const { width: w, height: h } = img;
+  const colDesign = new Float32Array(w), rowDesign = new Float32Array(h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const d = Math.max(Math.abs(img.data[i] - paper[0]), Math.abs(img.data[i + 1] - paper[1]), Math.abs(img.data[i + 2] - paper[2]));
+      if (d > DESIGN_CONTRAST) { colDesign[x]++; rowDesign[y]++; }
+    }
+  for (let x = 0; x < w; x++) colDesign[x] /= h;
+  for (let y = 0; y < h; y++) rowDesign[y] /= w;
+  const xs = [0, ...gutterCentres(colDesign), w];
+  const ys = [0, ...gutterCentres(rowDesign), h];
+  if (xs.length === 2 && ys.length === 2) return [];
+  const cells: Box[] = [];
+  for (let r = 0; r < ys.length - 1; r++)
+    for (let c = 0; c < xs.length - 1; c++) cells.push({ x: xs[c], y: ys[r], w: xs[c + 1] - xs[c], h: ys[r + 1] - ys[r] });
+  return cells;
+}
+
+/** Centres of interior low-design runs (gutters), merging runs split by ≤ 3 perforation-hole columns. */
+function gutterCentres(profile: Float32Array): number[] {
+  const n = profile.length;
+  const runs: [number, number][] = [];
+  for (let i = 0; i < n; ) {
+    if (profile[i] >= GUTTER_MAX_DESIGN) { i++; continue; }
+    let j = i;
+    while (j < n && profile[j] < GUTTER_MAX_DESIGN) j++;
+    const last = runs[runs.length - 1];
+    if (last && i - last[1] <= 3) last[1] = j; else runs.push([i, j]);
+    i = j;
+  }
+  const minCell = 0.15 * n, minRun = Math.max(2, 0.01 * n);
+  const centres: number[] = [];
+  for (const [a, b] of runs) {
+    if (a === 0 || b === n || b - a < minRun) continue;
+    const c = Math.round((a + b) / 2);
+    if (c - (centres[centres.length - 1] ?? 0) >= minCell && n - c >= minCell) centres.push(c);
+  }
+  return centres;
 }
 
 /** Axis-aligned boxes of rectangular regions that stand out from the background. */
@@ -87,7 +163,7 @@ function backgroundColour(img: RgbaImage): [number, number, number] {
   return ch.map((v) => { v.sort((a, b) => a - b); return v[v.length >> 1]; }) as [number, number, number];
 }
 
-function toOriginal(b: Box, scale: number, img: RgbaImage): Box {
+function toOriginal(b: Box, scale: number, img: { width: number; height: number }): Box {
   const x0 = Math.max(0, Math.floor(b.x / scale));
   const y0 = Math.max(0, Math.floor(b.y / scale));
   const x1 = Math.min(img.width, Math.ceil((b.x + b.w) / scale));
