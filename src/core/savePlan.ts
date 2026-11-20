@@ -3,13 +3,21 @@ import { colorSimilarity } from './color';
 export type NBox = { x: number; y: number; w: number; h: number };
 export type Candidate = { tempId: string; pos: NBox; embedding: Float32Array; color: Float32Array };
 export type Known = { id: string; pos?: NBox; embedding: Float32Array; color: Float32Array };
+export type KnownInGroup = Known & { groupId: string };
 export type Proposal =
   | { tempId: string; type: 'new' }
+  | { tempId: string; type: 'copyOf'; itemId: string; groupId: string; score: number }
   | { tempId: string; type: 'alreadySaved'; itemId: string; score: number }
   | { tempId: string; type: 'fileUnfiled'; itemId: string; score: number };
 
 export const ALREADY_MIN_IOU = 0.5;
 export const ALREADY_MIN_SCORE = 0.5;
+/** A re-shot frames the page differently, so positions shift: a strong look-alike on the same page is asked about wherever it sits. */
+export const ALREADY_ANYWHERE_SCORE = 0.65;
+/** Position only breaks ties (two copies of one stamp on a page): bonus = this × IoU. */
+const POSITION_TIEBREAK = 0.2;
+/** A strong look-alike elsewhere in the collection is offered as "another copy". */
+export const COPY_MIN_SCORE = 0.68;
 export const UNFILED_MIN_SCORE = 0.6;
 export const UNFILED_MIN_MARGIN = 0.03;
 const COLOR_WEIGHT = 0.5;
@@ -44,16 +52,18 @@ function greedy(pairs: Pair[], taken: Set<number>): Map<number, Pair> {
  * Proposals for the stamps found on a (re)photographed page. Every non-'new' proposal must be
  * confirmed by the user; nothing here is applied silently.
  */
-export function planPageSave(cands: Candidate[], onPage: Known[], unfiled: Known[]): Proposal[] {
+export function planPageSave(cands: Candidate[], onPage: Known[], unfiled: Known[], elsewhere: KnownInGroup[] = []): Proposal[] {
   const already: Pair[] = [];
   cands.forEach((c, ci) => {
     for (const k of onPage) {
-      if (!k.pos || iou(c.pos, k.pos) < ALREADY_MIN_IOU) continue;
+      const overlap = k.pos ? iou(c.pos, k.pos) : 0;
       const s = score(c, k);
-      if (s >= ALREADY_MIN_SCORE) already.push({ c: ci, itemId: k.id, score: s });
+      if ((overlap >= ALREADY_MIN_IOU && s >= ALREADY_MIN_SCORE) || s >= ALREADY_ANYWHERE_SCORE)
+        already.push({ c: ci, itemId: k.id, score: s + POSITION_TIEBREAK * overlap });
     }
   });
   const alreadyMap = greedy(already, new Set());
+  for (const p of alreadyMap.values()) p.score = score(cands[p.c], onPage.find((k) => k.id === p.itemId)!);
 
   const filing: Pair[] = [];
   cands.forEach((c, ci) => {
@@ -65,11 +75,21 @@ export function planPageSave(cands: Candidate[], onPage: Known[], unfiled: Known
   });
   const filingMap = greedy(filing, new Set(alreadyMap.keys()));
 
+  // Copies are not exclusive: several new stamps may each be another copy of the same one.
+  const groupOf = new Map(elsewhere.map((k) => [k.id, k.groupId]));
+  const copyOf = (c: Candidate) => {
+    let best: { id: string; s: number } | null = null;
+    for (const k of elsewhere) { const s = score(c, k); if (s >= COPY_MIN_SCORE && (!best || s > best.s)) best = { id: k.id, s }; }
+    return best;
+  };
+
   return cands.map((c, ci): Proposal => {
     const a = alreadyMap.get(ci);
     if (a) return { tempId: c.tempId, type: 'alreadySaved', itemId: a.itemId, score: a.score };
     const f = filingMap.get(ci);
     if (f) return { tempId: c.tempId, type: 'fileUnfiled', itemId: f.itemId, score: f.score };
+    const cp = copyOf(c);
+    if (cp) return { tempId: c.tempId, type: 'copyOf', itemId: cp.id, groupId: groupOf.get(cp.id)!, score: cp.s };
     return { tempId: c.tempId, type: 'new' };
   });
 }

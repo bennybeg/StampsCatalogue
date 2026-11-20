@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RgbaImage } from '../../core/image';
 import { planPageSave, type Known, type Proposal } from '../../core/savePlan';
-import { listByPage, listUnfiled } from '../../db/db';
+import { getItem, listByPage, listUnfiled, loadIndex } from '../../db/db';
 import { BoxEditor, type EditBox } from '../components/BoxEditor';
 import { useT } from '../i18n';
 import { useServices } from '../services';
@@ -27,6 +27,8 @@ export function PageCapture({ go }: { go(path: string): void }) {
   const [photoUrl, setPhotoUrl] = useState('');
   const [boxes, setBoxes] = useState<EditBox[]>([]);
   const [rejected, setRejected] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false); // guards taps that arrive before React re-renders
   const album = parsePageNumber(albumText), page = parsePageNumber(pageText);
 
   useEffect(() => () => { if (photoUrl) URL.revokeObjectURL(photoUrl); }, [photoUrl]);
@@ -42,21 +44,33 @@ export function PageCapture({ go }: { go(path: string): void }) {
       setBoxes(found.map((d, i) => ({ key: String(i), box: d.box, kind: d.kind, inner: d.inner, unresolved: d.unresolved })));
       setStep({ s: 'editing' });
     } catch (e) {
-      setStep({ s: 'error', msg: (e as Error).message });
+      console.error(e);
+      setStep({ s: 'error', msg: t('errorGeneric') });
     }
   };
 
   const onTapEmpty = async (x: number, y: number) => {
     if (!photo) return;
-    const b = await svc.recognizer.snap(photo, x, y);
+    const b = await svc.recognizer.snap(photo, x, y).catch(() => null);
     if (b) setBoxes((cur) => [...cur, { key: `t${Date.now()}`, box: b, kind: 'single', inner: [] }]);
   };
 
   const finish = async (cands: CandidateWithCrops[], proposals: Proposal[]) => {
-    const db = await svc.getDb();
-    const accepted = proposals.map((p): Proposal => (rejected.has(p.tempId) ? { tempId: p.tempId, type: 'new' } : p));
-    await applyProposals(db, album!, page!, cands, accepted);
-    setStep({ s: 'done', n: cands.length });
+    if (busyRef.current) return; // a double tap must not save twice
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      const db = await svc.getDb();
+      const accepted = proposals.map((p): Proposal => (rejected.has(p.tempId) ? { tempId: p.tempId, type: 'new' } : p));
+      await applyProposals(db, album!, page!, cands, accepted);
+      setStep({ s: 'done', n: accepted.filter((p) => p.type === 'new' || p.type === 'copyOf').length });
+    } catch (e) {
+      console.error(e);
+      setStep({ s: 'error', msg: t('errorGeneric') });
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
   };
 
   const onSave = async () => {
@@ -68,13 +82,17 @@ export function PageCapture({ go }: { go(path: string): void }) {
       const onPage = await listByPage(db, album, page);
       const unfiled = await listUnfiled(db);
       const asKnown = (i: { id: string; pos?: Known['pos']; embedding: Float32Array; color: Float32Array }): Known => ({ id: i.id, pos: i.pos, embedding: i.embedding, color: i.color });
-      const proposals = planPageSave(cands, onPage.map(asKnown), unfiled.map(asKnown));
+      const local = new Set([...onPage, ...unfiled].map((i) => i.id));
+      const elsewhere = (await loadIndex(db)).filter((e) => !local.has(e.id));
+      const proposals = planPageSave(cands, onPage.map(asKnown), unfiled.map(asKnown), elsewhere);
       if (proposals.every((p) => p.type === 'new')) return await finish(cands, proposals);
-      const known = new Map([...onPage, ...unfiled].map((i) => [i.id, i.thumb]));
+      const others = await Promise.all(proposals.filter((p) => p.type === 'copyOf').map((p) => getItem(db, (p as { itemId: string }).itemId)));
+      const known = new Map([...onPage, ...unfiled, ...others.filter((i) => !!i)].map((i) => [i!.id, i!.thumb]));
       setRejected(new Set());
       setStep({ s: 'confirm', cands, proposals, known });
     } catch (e) {
-      setStep({ s: 'error', msg: (e as Error).message });
+      console.error(e);
+      setStep({ s: 'error', msg: t('errorGeneric') });
     }
   };
 
@@ -122,11 +140,11 @@ export function PageCapture({ go }: { go(path: string): void }) {
                 }} />
                 <BlobImg blob={c.thumb} className="thumb" />
                 <BlobImg blob={step.known.get(itemId)} className="thumb" />
-                <span>{t(p.type === 'alreadySaved' ? 'proposalAlready' : 'proposalUnfiled')}</span>
+                <span>{t(p.type === 'alreadySaved' ? 'proposalAlready' : p.type === 'copyOf' ? 'proposalCopy' : 'proposalUnfiled')}</span>
               </label>
             );
           })}
-          <button className="big primary" onClick={() => finish(step.cands, step.proposals)}>{t('save')}</button>
+          <button className="big primary" disabled={busy} onClick={() => finish(step.cands, step.proposals)}>{busy ? t('working') : t('save')}</button>
         </>
       )}
       {step.s === 'done' && (
@@ -138,7 +156,7 @@ export function PageCapture({ go }: { go(path: string): void }) {
       )}
       {step.s === 'error' && (
         <>
-          <p className="banner">{t('errorPrefix', { msg: step.msg })}</p>
+          <p className="banner">{step.msg}</p>
           <button className="big" onClick={() => setStep({ s: 'form' })}>{t('back')}</button>
         </>
       )}

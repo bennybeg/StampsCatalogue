@@ -11,6 +11,18 @@ const KINDS: { kind: ItemKind; label: Key }[] = [
 ];
 type Corner = 'nw' | 'ne' | 'sw' | 'se';
 
+/** Move one corner of a box to `p` (photo coords), keeping inner stamps where they are on the photo. */
+export function resizeBox(b: EditBox, corner: Corner, p: { x: number; y: number }, width: number, height: number): EditBox {
+  const { x, y, w, h } = b.box;
+  const x2 = x + w, y2 = y + h;
+  const nx = Math.max(0, corner.includes('w') ? Math.min(p.x, x2 - 10) : x);
+  const ny = Math.max(0, corner.includes('n') ? Math.min(p.y, y2 - 10) : y);
+  const nx2 = Math.min(width, corner.includes('e') ? Math.max(p.x, x + 10) : x2);
+  const ny2 = Math.min(height, corner.includes('s') ? Math.max(p.y, y + 10) : y2);
+  const dx = x - nx, dy = y - ny;
+  return { ...b, box: { x: nx, y: ny, w: nx2 - nx, h: ny2 - ny }, inner: b.inner.map((i) => ({ ...i, x: i.x + dx, y: i.y + dy })), unresolved: false };
+}
+
 /**
  * A photo with boxes over it. Edit mode: tap a box to select (delete, change kind, drag corners);
  * tap empty photo to add (the caller snaps a box there). Pick mode: tap a box to choose it.
@@ -71,16 +83,8 @@ export function BoxEditor(props: {
     if (!d || !scale) return;
     const b = props.boxes.find((x) => x.key === d.key);
     if (!b) return;
-    const p = toPhoto(e.clientX, e.clientY);
-    let { x, y, w, h } = b.box;
-    const x2 = x + w, y2 = y + h;
-    const nx = d.corner.includes('w') ? Math.min(p.x, x2 - 10) : x;
-    const ny = d.corner.includes('n') ? Math.min(p.y, y2 - 10) : y;
-    const nx2 = d.corner.includes('e') ? Math.max(p.x, x + 10) : x2;
-    const ny2 = d.corner.includes('s') ? Math.max(p.y, y + 10) : y2;
-    x = Math.max(0, nx); y = Math.max(0, ny);
-    w = Math.min(props.width, nx2) - x; h = Math.min(props.height, ny2) - y;
-    update(d.key, { box: { x, y, w, h }, unresolved: false });
+    const r = resizeBox(b, d.corner, toPhoto(e.clientX, e.clientY), props.width, props.height);
+    update(d.key, { box: r.box, inner: r.inner, unresolved: false });
   };
 
   return (

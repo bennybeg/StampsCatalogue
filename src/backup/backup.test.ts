@@ -45,4 +45,34 @@ describe('backup', () => {
     await expect(importZip(db, new Blob(['not a zip']))).rejects.toThrow('bad backup');
     expect(await allItems(db)).toHaveLength(1);
   });
+
+  it('stores every entry uncompressed (so restore can slice instead of unzipping in memory)', async () => {
+    const db = await openStampDb('bk3');
+    await putItems(db, [item('a')]);
+    const zip = new Uint8Array(await (await exportZip(db)).arrayBuffer());
+    const dv = new DataView(zip.buffer);
+    let eocd = zip.length - 22;
+    while (dv.getUint32(eocd, true) !== 0x06054b50) eocd--;
+    let p = dv.getUint32(eocd + 16, true);
+    const methods: number[] = [];
+    for (let k = 0; k < dv.getUint16(eocd + 10, true); k++) {
+      methods.push(dv.getUint16(p + 10, true));
+      p += 46 + dv.getUint16(p + 28, true) + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
+    }
+    expect(methods.length).toBe(3);
+    expect(methods.every((m) => m === 0)).toBe(true);
+  });
+
+  it('restores by slicing the file, never reading it whole', async () => {
+    const db = await openStampDb('bk4');
+    await putItems(db, [item('a'), item('b')]);
+    const real = await exportZip(db);
+    const guarded = Object.create(Blob.prototype, {
+      size: { value: real.size }, type: { value: real.type },
+      slice: { value: (a?: number, b?: number) => real.slice(a, b) },
+      arrayBuffer: { value: () => { throw new Error('read whole file'); } },
+    }) as Blob;
+    await clearAll(db);
+    expect(await importZip(db, guarded)).toEqual({ items: 2 });
+  });
 });

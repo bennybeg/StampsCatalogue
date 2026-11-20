@@ -69,6 +69,7 @@ export async function applyProposals(db: StampDb, album: number, page: number, c
     if (p.type === 'fileUnfiled') { await updateItem(db, p.itemId, { album, page, pos: c.pos }); continue; }
     if (p.type === 'alreadySaved') { await updateItem(db, p.itemId, { pos: c.pos }); continue; }
     const parent = newItem({ kind: c.box.kind, album, page, pos: c.pos, image: c.image, thumb: c.thumb, embedding: c.embedding, color: c.color });
+    if (p.type === 'copyOf') parent.groupId = p.groupId;
     fresh.push(parent);
     for (const ch of c.children)
       fresh.push(newItem({ kind: 'single', parentId: parent.id, album, page, pos: ch.pos, image: ch.image, thumb: ch.thumb, embedding: ch.embedding, color: ch.color }));

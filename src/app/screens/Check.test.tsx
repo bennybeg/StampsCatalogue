@@ -15,7 +15,7 @@ vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:x', revok
 
 const unit = (k: number) => { const e = new Float32Array(8); e[k] = 1; return e; };
 
-async function setup(detected: Detected[]) {
+async function setup(detected: Detected[], failDescribe = false) {
   const db = await openStampDb(`check${Math.random()}`);
   await putItems(db, Array.from({ length: 6 }, (_, k) => ({
     id: `s${k}`, kind: 'single' as const, groupId: `s${k}`, forTrade: false, album: 1, page: k + 1,
@@ -23,7 +23,7 @@ async function setup(detected: Detected[]) {
   })));
   const recognizer: Recognizer = {
     detect: async () => detected, snap: async () => null, warmUp: async () => {},
-    describe: async () => ({ embedding: unit(2), color: new Float32Array(72) }),
+    describe: async () => { if (failDescribe) throw new Error('boom'); return { embedding: unit(2), color: new Float32Array(72) }; },
   };
   const services: Services = {
     getDb: async () => db, recognizer,
@@ -52,5 +52,26 @@ describe('Check', () => {
     await waitFor(() => expect(screen.getByText(ru.pickStamp)).toBeTruthy());
     fireEvent.click(screen.getByTestId('box-0'));
     await waitFor(() => expect(screen.getAllByTestId('match-row')).toHaveLength(5));
+  });
+
+  it('adds only one stamp on a double tap and resets "for trade" for the next one', async () => {
+    const db = await setup(one);
+    await waitFor(() => expect(screen.getAllByTestId('match-row')).toHaveLength(5));
+    fireEvent.click(screen.getByRole('checkbox', { name: ru.forTrade }));
+    const add = screen.getByRole('button', { name: ru.addToCollection });
+    fireEvent.click(add);
+    fireEvent.click(add);
+    await waitFor(() => expect(screen.getByText(ru.addedUnfiled)).toBeTruthy());
+    expect(await countUnfiled(db)).toBe(1);
+    fireEvent.change(screen.getByLabelText(ru.takePhoto), { target: { files: [new File(['x'], 'q2.jpg')] } });
+    await waitFor(() => expect(screen.getAllByTestId('match-row')).toHaveLength(5));
+    expect((screen.getByRole('checkbox', { name: ru.forTrade }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('shows an error instead of spinning when recognising the picked stamp fails', async () => {
+    await setup([...one, { box: { x: 70, y: 10, w: 20, h: 30 }, kind: 'single', inner: [] }], true);
+    await waitFor(() => expect(screen.getByText(ru.pickStamp)).toBeTruthy());
+    fireEvent.click(screen.getByTestId('box-0'));
+    await waitFor(() => expect(screen.getByText(ru.errorGeneric)).toBeTruthy());
   });
 });

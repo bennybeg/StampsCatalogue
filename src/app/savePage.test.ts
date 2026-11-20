@@ -38,3 +38,13 @@ describe('applyProposals', () => {
     expect(await listByPage(db, 2, 5)).toHaveLength(3);
   });
 });
+
+describe('applyProposals copies', () => {
+  it('saves "another copy" in the existing stamp\'s group', async () => {
+    const db = await openStampDb('apply2');
+    await putItems(db, [item('orig', { album: 1, page: 1, groupId: 'g1' })]);
+    await applyProposals(db, 4, 2, [cand('c1', 'single')], [{ tempId: 'c1', type: 'copyOf', itemId: 'orig', groupId: 'g1', score: 0.9 }]);
+    const copy = (await allItems(db)).find((i) => i.id !== 'orig')!;
+    expect(copy).toMatchObject({ groupId: 'g1', album: 4, page: 2 });
+  });
+});

@@ -78,4 +78,7 @@ export const en: Record<keyof typeof ru, string> = {
   loadingEngine: 'Loading stamp recognition… (the first time needs internet)',
   loadFailed: 'Could not load stamp recognition. Check the internet connection.',
   retry: 'Retry',
+  errorGeneric: 'Something went wrong. Please try again.',
+  proposalCopy: 'Another copy of this stamp',
+  working: 'One moment…',
 };

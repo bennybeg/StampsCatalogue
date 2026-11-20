@@ -19,8 +19,8 @@ import { fileToRgba, rgbaToJpeg } from './imageio';
 /** Real services, created lazily so nothing heavy starts until a screen needs it. */
 function realServices(): Services {
   let db: Promise<StampDb> | null = null;
-  let rec: Recognizer | null = null;
-  const lazyRec = () => (rec ??= getRecognizer());
+  // getRecognizer() is itself a singleton that is replaced after a crash, so ask it every time.
+  const lazyRec = (): Recognizer => getRecognizer();
   return {
     getDb: () => (db ??= openStampDb()),
     recognizer: {

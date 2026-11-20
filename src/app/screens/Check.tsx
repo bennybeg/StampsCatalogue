@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { crop, withMargin, type Box, type RgbaImage } from '../../core/image';
 import { rankMatches } from '../../core/match';
 import { edgesDiffer } from '../../core/edges';
@@ -32,17 +32,25 @@ export function Check({ go }: { go(path: string): void }) {
   const [forTrade, setForTrade] = useState(false);
   const [queryBlob, setQueryBlob] = useState<Blob | null>(null);
   const [differ, setDiffer] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false); // guards taps that arrive before React re-renders
+  const fail = (e: unknown) => { console.error(e); setStep({ s: 'error', msg: t('errorGeneric') }); };
 
   const search = async (photo: RgbaImage, box: Box | null) => {
-    setStep({ s: 'working' });
-    const img = box ? crop(photo, withMargin(box, photo)) : photo;
-    const look = await svc.recognizer.describe(img);
-    const db = await svc.getDb();
-    const matches = rankMatches(look, await loadIndex(db), { k: MATCH_K, colorWeight: COLOR_WEIGHT });
-    const rows = await Promise.all(matches.map((m) => describeMatch(db, m)));
-    setQueryBlob(await svc.encode(img, IMAGE_SIDE, JPEG_QUALITY));
-    setSameGroup(null);
-    setStep({ s: 'results', q: { img, look }, rows });
+    try {
+      setStep({ s: 'working' });
+      const img = box ? crop(photo, withMargin(box, photo)) : photo;
+      const look = await svc.recognizer.describe(img);
+      const db = await svc.getDb();
+      const matches = rankMatches(look, await loadIndex(db), { k: MATCH_K, colorWeight: COLOR_WEIGHT });
+      const rows = await Promise.all(matches.map((m) => describeMatch(db, m)));
+      setQueryBlob(await svc.encode(img, IMAGE_SIDE, JPEG_QUALITY));
+      setSameGroup(null);
+      setForTrade(false);
+      setStep({ s: 'results', q: { img, look }, rows });
+    } catch (e) {
+      fail(e);
+    }
   };
 
   const onFile = async (file?: File) => {
@@ -55,7 +63,7 @@ export function Check({ go }: { go(path: string): void }) {
         return setStep({ s: 'pick', photo, url: URL.createObjectURL(file), boxes: found.map((d, i) => ({ key: String(i), box: d.box, kind: d.kind, inner: d.inner })) });
       await search(photo, found[0]?.box ?? null);
     } catch (e) {
-      setStep({ s: 'error', msg: (e as Error).message });
+      fail(e);
     }
   };
 
@@ -71,14 +79,25 @@ export function Check({ go }: { go(path: string): void }) {
   };
 
   const add = async (q: Query) => {
-    const db = await svc.getDb();
-    const id = crypto.randomUUID();
-    await putItems(db, [{
-      id, kind: 'single', groupId: sameGroup ?? id, forTrade,
-      image: await svc.encode(q.img, IMAGE_SIDE, JPEG_QUALITY), thumb: await svc.encode(q.img, THUMB_SIDE, JPEG_QUALITY),
-      embedding: q.look.embedding, color: q.look.color, createdAt: Date.now(),
-    }]);
-    setStep({ s: 'added' });
+    if (busyRef.current) return; // a double tap must not add twice
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      const db = await svc.getDb();
+      const id = crypto.randomUUID();
+      await putItems(db, [{
+        id, kind: 'single', groupId: sameGroup ?? id, forTrade,
+        image: await svc.encode(q.img, IMAGE_SIDE, JPEG_QUALITY), thumb: await svc.encode(q.img, THUMB_SIDE, JPEG_QUALITY),
+        embedding: q.look.embedding, color: q.look.color, createdAt: Date.now(),
+      }]);
+      setForTrade(false);
+      setStep({ s: 'added' });
+    } catch (e) {
+      fail(e);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
   };
 
   return (
@@ -88,7 +107,7 @@ export function Check({ go }: { go(path: string): void }) {
       {(step.s === 'start' || step.s === 'added' || step.s === 'error') && (
         <>
           {step.s === 'added' && <p className="banner ok">{t('addedUnfiled')}</p>}
-          {step.s === 'error' && <p className="banner">{t('errorPrefix', { msg: step.msg })}</p>}
+          {step.s === 'error' && <p className="banner">{step.msg}</p>}
           <label className="big button primary">
             {step.s === 'start' ? t('takePhoto') : t('checkAnother')}
             <input type="file" accept="image/*" capture="environment" hidden aria-label={t('takePhoto')} onChange={(e) => onFile(e.target.files?.[0])} />
@@ -101,7 +120,7 @@ export function Check({ go }: { go(path: string): void }) {
           <p>{t('pickStamp')}</p>
           <BoxEditor photoUrl={step.url} width={step.photo.width} height={step.photo.height} boxes={step.boxes} mode="pick"
             onPick={(b) => search(step.photo, b.box)}
-            onTapEmpty={async (x, y) => { const b = await svc.recognizer.snap(step.photo, x, y); if (b) search(step.photo, b); }} />
+            onTapEmpty={async (x, y) => { const b = await svc.recognizer.snap(step.photo, x, y).catch(() => null); if (b) search(step.photo, b); }} />
         </>
       )}
       {step.s === 'results' && (
@@ -114,8 +133,8 @@ export function Check({ go }: { go(path: string): void }) {
               <span>{rowLabel(t, r)}</span>
             </button>
           ))}
-          <label className="row check"><input type="checkbox" checked={forTrade} onChange={(e) => setForTrade(e.target.checked)} /> {t('forTrade')}</label>
-          <button className="big primary" onClick={() => add(step.q)}>{t('addToCollection')}</button>
+          <label className="row check"><input type="checkbox" aria-label={t('forTrade')} checked={forTrade} onChange={(e) => setForTrade(e.target.checked)} /> {t('forTrade')}</label>
+          <button className="big primary" disabled={busy} onClick={() => add(step.q)}>{t('addToCollection')}</button>
           <label className="big button">
             {t('checkAnother')}
             <input type="file" accept="image/*" capture="environment" hidden onChange={(e) => onFile(e.target.files?.[0])} />

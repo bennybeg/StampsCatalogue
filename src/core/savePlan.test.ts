@@ -14,8 +14,21 @@ describe('planPageSave', () => {
     expect(planPageSave([cand('c1')], [known('k1', at(0.1, 0.1))], [])).toEqual([{ tempId: 'c1', type: 'alreadySaved', itemId: 'k1', score: expect.any(Number) }]);
   });
 
-  it('treats the same stamp at a different spot as new', () => {
-    expect(planPageSave([cand('c1', at(0.6, 0.6))], [known('k1', at(0.1, 0.1))], [])[0].type).toBe('new');
+  it('asks about a strong match at a different spot (a re-shot framed differently) instead of saving a duplicate', () => {
+    expect(planPageSave([cand('c1', at(0.6, 0.6))], [known('k1', at(0.1, 0.1))], [])[0]).toMatchObject({ type: 'alreadySaved', itemId: 'k1' });
+  });
+
+  it('asks about an on-page stamp that has no position (filed from the unfiled list)', () => {
+    expect(planPageSave([cand('c1')], [known('k1', undefined)], [])[0]).toMatchObject({ type: 'alreadySaved', itemId: 'k1' });
+  });
+
+  it('treats a different stamp as new', () => {
+    expect(planPageSave([cand('c1', at(0.1, 0.1), B)], [known('k1', at(0.1, 0.1))], [])[0].type).toBe('new');
+  });
+
+  it('offers "another copy" for a strong match elsewhere in the collection', () => {
+    const r = planPageSave([cand('c1')], [], [], [{ ...known('x1', at(0.3, 0.3)), groupId: 'g7' }]);
+    expect(r[0]).toMatchObject({ type: 'copyOf', itemId: 'x1', groupId: 'g7' });
   });
 
   it('keeps two copies of one stamp as two separate "already saved" items', () => {

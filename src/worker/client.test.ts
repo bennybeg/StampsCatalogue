@@ -34,4 +34,20 @@ describe('recognizer RPC', () => {
     expect([a!.x, b!.x]).toEqual([1, 9]);
     close();
   });
+
+  it('rejects pending calls and reports a dead worker when it errors', async () => {
+    const port = { postMessage() {}, onmessage: null, onerror: null as null | ((e: unknown) => void) };
+    let dead = 0;
+    const rec = createRecognizer(port, { onDead: () => dead++ });
+    const p = rec.detect(img);
+    port.onerror!(new Event('error'));
+    await expect(p).rejects.toThrow();
+    expect(dead).toBe(1);
+  });
+
+  it('times out a call that never answers', async () => {
+    const port = { postMessage() {}, onmessage: null };
+    const rec = createRecognizer(port, { timeoutMs: 20 });
+    await expect(rec.detect(img)).rejects.toThrow('timeout');
+  });
 });

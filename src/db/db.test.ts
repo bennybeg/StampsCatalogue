@@ -52,6 +52,15 @@ describe('stamp db', () => {
     expect(s.groupId).toBe(single.groupId);
   });
 
+  it('indexes a block, sheet or cover that has no stamps inside', async () => {
+    const lone = item({ kind: 'cover' });
+    const withChild = item({ kind: 'block' });
+    await putItems(db, [lone, withChild, item({ parentId: withChild.id })]);
+    const ids = (await loadIndex(db)).map((e) => e.id);
+    expect(ids).toContain(lone.id);
+    expect(ids).not.toContain(withChild.id);
+  });
+
   it('counts copies and trade copies in a group', async () => {
     const a = item();
     await putItems(db, [a, item({ groupId: a.groupId, forTrade: true })]);

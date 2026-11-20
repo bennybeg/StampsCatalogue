@@ -87,10 +87,15 @@ export async function listAlbums(db: StampDb): Promise<{ album: number; pages: n
   return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([album, pages]) => ({ album, pages: [...pages].sort((a, b) => a - b) }));
 }
 
-/** Matchable stamps: singles, including stamps inside blocks/sheets/covers. */
+/**
+ * Matchable items: singles (including stamps inside blocks/sheets/covers), plus any block/sheet/cover
+ * with no stamps found inside it — otherwise it could never be found at the club.
+ */
 export async function loadIndex(db: StampDb): Promise<(IndexEntry & { groupId: string })[]> {
-  return (await db.getAll('items'))
-    .filter((i) => i.kind === 'single')
+  const all = await db.getAll('items');
+  const parents = new Set(all.map((i) => i.parentId).filter(Boolean));
+  return all
+    .filter((i) => i.kind === 'single' || (i.parentId === undefined && !parents.has(i.id)))
     .map((i) => ({ id: i.id, embedding: i.embedding, color: i.color, groupId: i.groupId }));
 }
 
