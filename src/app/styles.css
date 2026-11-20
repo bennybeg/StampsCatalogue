@@ -30,3 +30,11 @@ input, select, textarea { font: inherit; min-height: 48px; padding: 8px 12px; bo
 .toolbar { flex-wrap: wrap; position: sticky; bottom: 0; background: var(--bg); padding: 8px 0; }
 .toolbar button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
 button.danger { color: #c62828; }
+label.button { display: flex; align-items: center; justify-content: flex-start; min-height: 64px; padding: 10px 16px; border-radius: 12px; border: 1px solid var(--border); font-size: 1.15rem; cursor: pointer; }
+label.button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+label.button.disabled { opacity: 0.5; pointer-events: none; }
+label { display: flex; flex-direction: column; gap: 4px; }
+.row label { flex: 1; }
+.thumb { width: 72px; height: 72px; object-fit: contain; background: #0002; border-radius: 8px; }
+.proposal { flex-direction: row; align-items: center; gap: 10px; }
+.banner.ok { background: #dff3e4; color: #0f4d22; }

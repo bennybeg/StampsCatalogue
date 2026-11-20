@@ -34,13 +34,15 @@ export function BoxEditor(props: {
   useEffect(() => {
     if (props.displayWidth || !ref.current) return;
     const el = ref.current;
+    setMeasured(el.clientWidth);
+    if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => setMeasured(el.clientWidth));
     ro.observe(el);
-    setMeasured(el.clientWidth);
     return () => ro.disconnect();
   }, [props.displayWidth]);
 
-  const dispW = props.displayWidth ?? measured;
+  // Until the container is measured, draw at photo scale rather than hiding the boxes.
+  const dispW = props.displayWidth ?? (measured || props.width);
   const scale = dispW > 0 ? dispW / props.width : 0;
   const sel = props.boxes.find((b) => b.key === selected);
   const update = (key: string, patch: Partial<EditBox>) =>
