@@ -1,20 +1,32 @@
 import { getCv, type CV } from './cv';
 import { crop, resizeTo, type Box, type RgbaImage } from './image';
 
-export type ItemKind = 'single' | 'block' | 'cover';
+/**
+ * 'sheet' = a large item: souvenir sheet or cover (envelope). They look alike to the detector;
+ * the user can relabel a sheet as 'cover'.
+ */
+export type ItemKind = 'single' | 'block' | 'sheet' | 'cover';
 export type Detected = { box: Box; kind: ItemKind; inner: Box[] };
 
 /** Smallest item, as a fraction of the page area (at working resolution). */
 const MIN_AREA_FRACTION = 0.002;
-/** A contour must fill this much of its minimum-area rectangle to count as rectangular. */
-const MIN_FILL = 0.7;
+/** A piece must fill this much of its bounding box (a stamp rotated ~10° fills ~0.75). */
+const MIN_FILL = 0.6;
+/** A blob filling at least this much of its box is treated as one rectangle and not cut further. */
+const RECT_FILL = 0.92;
+/** Blobs filling less than this of their box are too irregular to cut into stamps. */
+const SPLIT_MIN_FILL = 0.6;
+/** Pieces longer than this × their width are page edges or strip glare, not items. */
+const MAX_ASPECT = 6;
 /** Pixels must differ from the page background by at least this much (0–255). */
 const MIN_CONTRAST = 25;
 /** A box this much inside another box is a duplicate and is dropped. */
 const CONTAINED = 0.9;
+/** Items at least this × the median item area (and not too elongated) are sheets/covers. */
+const SHEET_AREA = 5;
 
 /**
- * Find stamps, blocks and covers on a photo of an album page.
+ * Find stamps, blocks and sheets/covers on a photo of an album page.
  * Boxes are in the coordinates of `img`, sorted top-to-bottom then left-to-right.
  */
 export async function detectItems(img: RgbaImage, opts: { workingMaxSide?: number } = {}): Promise<Detected[]> {
@@ -30,25 +42,190 @@ export async function detectItems(img: RgbaImage, opts: { workingMaxSide?: numbe
   return sortReadingOrder(items);
 }
 
+/** Axis-aligned boxes of rectangular regions that stand out from the background. */
+export function findRectangles(cv: CV, img: RgbaImage, minAreaFraction: number): Box[] {
+  const bg = backgroundColour(img);
+  const diff = new cv.Mat(img.height, img.width, cv.CV_8UC1);
+  const d = diff.data as Uint8Array;
+  for (let p = 0, i = 0; p < d.length; p++, i += 4) {
+    d[p] = Math.max(Math.abs(img.data[i] - bg[0]), Math.abs(img.data[i + 1] - bg[1]), Math.abs(img.data[i + 2] - bg[2]));
+  }
+  cv.GaussianBlur(diff, diff, new cv.Size(5, 5), 0);
+  const mask = new cv.Mat();
+  const otsu = cv.threshold(diff, mask, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+  if (otsu < MIN_CONTRAST) cv.threshold(diff, mask, MIN_CONTRAST, 255, cv.THRESH_BINARY);
+  diff.delete();
+
+  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+  cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
+  kernel.delete();
+
+  // Fill holes (dark stamp designs inside light paper margins) by redrawing external contours filled.
+  const contours = new cv.MatVector(), hierarchy = new cv.Mat();
+  cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  mask.setTo(new cv.Scalar(0));
+  cv.drawContours(mask, contours, -1, new cv.Scalar(255), cv.FILLED);
+  contours.delete(); hierarchy.delete();
+
+  const labels = new cv.Mat(), stats = new cv.Mat(), cents = new cv.Mat();
+  const n: number = cv.connectedComponentsWithStats(mask, labels, stats, cents, 8, cv.CV_32S);
+  const lab = labels.data32S as Int32Array;
+  const st = stats.data32S as Int32Array;
+  const minArea = minAreaFraction * img.width * img.height;
+  const out: Box[] = [];
+  for (let k = 1; k < n; k++) {
+    const box = { x: st[k * 5], y: st[k * 5 + 1], w: st[k * 5 + 2], h: st[k * 5 + 3] };
+    if (box.w * box.h < minArea) continue;
+    const blob = blobMask(lab, img.width, box, k);
+    for (const piece of splitBlob(blob, box, 0)) {
+      const aspect = Math.max(piece.w, piece.h) / Math.min(piece.w, piece.h);
+      if (piece.w * piece.h >= minArea && aspect <= MAX_ASPECT) out.push(piece);
+    }
+  }
+  mask.delete(); labels.delete(); stats.delete(); cents.delete();
+  return out;
+}
+
+/** Binary mask (1 byte per pixel) of component `k` inside `box`. */
+function blobMask(lab: Int32Array, stride: number, box: Box, k: number): Uint8Array {
+  const m = new Uint8Array(box.w * box.h);
+  for (let y = 0; y < box.h; y++) {
+    const row = (box.y + y) * stride + box.x;
+    for (let x = 0; x < box.w; x++) if (lab[row + x] === k) m[y * box.w + x] = 1;
+  }
+  return m;
+}
+
+/**
+ * Cut a blob of touching/overlapping items into rectangles. Where neighbouring items sit at
+ * different heights (or widths), the blob's outline steps; cut at the biggest step and recurse.
+ */
+function splitBlob(m: Uint8Array, box: Box, depth: number): Box[] {
+  const tight = tighten(m, box);
+  if (!tight) return [];
+  ({ m, box } = tight);
+  let count = 0;
+  for (let i = 0; i < m.length; i++) count += m[i];
+  const fill = count / (box.w * box.h);
+  if (fill >= RECT_FILL || depth >= 8) return [box];
+  // A sprawling blob (stamps chained by glare or strips) can't be cut reliably: leave it to the user.
+  if (fill < SPLIT_MIN_FILL) return [];
+
+  const cut = biggestStep(m, box.w, box.h, 'x') ?? biggestStep(m, box.w, box.h, 'y');
+  if (!cut) return fill >= MIN_FILL ? [box] : [];
+  const [a, b] = cut.axis === 'x' ? splitAt(m, box, cut.at, 'x') : splitAt(m, box, cut.at, 'y');
+  return [...splitBlob(a.m, a.box, depth + 1), ...splitBlob(b.m, b.box, depth + 1)];
+}
+
+/** Shrink a mask to the bounding box of its set pixels. */
+function tighten(m: Uint8Array, box: Box): { m: Uint8Array; box: Box } | null {
+  let x0 = box.w, y0 = box.h, x1 = -1, y1 = -1;
+  for (let y = 0; y < box.h; y++)
+    for (let x = 0; x < box.w; x++)
+      if (m[y * box.w + x]) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x1 < 0) return null;
+  const w = x1 - x0 + 1, h = y1 - y0 + 1;
+  if (w === box.w && h === box.h) return { m, box };
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) out.set(m.subarray((y0 + y) * box.w + x0, (y0 + y) * box.w + x0 + w), y * w);
+  return { m: out, box: { x: box.x + x0, y: box.y + y0, w, h } };
+}
+
+function splitAt(m: Uint8Array, box: Box, at: number, axis: 'x' | 'y'): { m: Uint8Array; box: Box }[] {
+  const part = (from: number, to: number) => {
+    const w = axis === 'x' ? to - from : box.w, h = axis === 'y' ? to - from : box.h;
+    const out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const sx = axis === 'x' ? x + from : x, sy = axis === 'y' ? y + from : y;
+        out[y * w + x] = m[sy * box.w + sx];
+      }
+    return { m: out, box: axis === 'x' ? { ...box, x: box.x + from, w } : { ...box, y: box.y + from, h } };
+  };
+  const len = axis === 'x' ? box.w : box.h;
+  return [part(0, at), part(at, len)];
+}
+
+/**
+ * Position along `axis` where the blob's outline (first/last set pixel across the other axis)
+ * jumps the most, if the jump exceeds 6% of the cross extent. Compares 6-wide windows on each
+ * side (dropping each window's extremes, so perforation teeth don't count).
+ */
+function biggestStep(m: Uint8Array, w: number, h: number, axis: 'x' | 'y'): { axis: 'x' | 'y'; at: number } | null {
+  const len = axis === 'x' ? w : h, cross = axis === 'x' ? h : w;
+  const first = new Float32Array(len), last = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    let f = -1, l = -1;
+    for (let j = 0; j < cross; j++) {
+      const v = axis === 'x' ? m[j * w + i] : m[i * w + j];
+      if (v) { if (f < 0) f = j; l = j; }
+    }
+    first[i] = f < 0 ? cross : f;
+    last[i] = l < 0 ? 0 : l;
+  }
+  const W = 6, minPart = Math.max(8, Math.round(0.12 * len));
+  // A step is flat on both sides (spread well under the jump); a tilted stamp's steep side is not.
+  const stats = (arr: Float32Array, a: number, b: number) => {
+    const s = Array.from(arr.subarray(a, b)).sort((p, q) => p - q);
+    return { med: s[s.length >> 1], spread: s[s.length - 2] - s[1] };
+  };
+  const step = (arr: Float32Array, i: number) => {
+    const l = stats(arr, i - W, i), r = stats(arr, i, i + W);
+    const jump = Math.abs(l.med - r.med);
+    return Math.max(l.spread, r.spread) <= jump / 4 ? jump : 0;
+  };
+  let best = 0, at = -1;
+  for (let i = minPart; i <= len - minPart; i++) {
+    const jump = Math.max(step(first, i), step(last, i));
+    if (jump > best) { best = jump; at = i; }
+  }
+  return best > Math.max(6, 0.06 * cross) ? { axis, at } : null;
+}
+
+/**
+ * The album page colour: the most common coarse colour (32 levels per channel) in a frame 4% wide
+ * around the photo, averaged over the pixels in that bin. The mode resists stamps cut by the frame.
+ */
+function backgroundColour(img: RgbaImage): [number, number, number] {
+  const t = Math.max(2, Math.round(Math.min(img.width, img.height) * 0.04));
+  const step = Math.max(1, Math.floor(Math.sqrt((img.width * img.height) / 400_000)));
+  const key = (i: number) => ((img.data[i] >> 5) << 6) | ((img.data[i + 1] >> 5) << 3) | (img.data[i + 2] >> 5);
+  const inFrame = (x: number, y: number) => x < t || y < t || x >= img.width - t || y >= img.height - t;
+  const counts = new Map<number, number>();
+  for (let y = 0; y < img.height; y += step)
+    for (let x = 0; x < img.width; x += step)
+      if (inFrame(x, y)) { const k = key((y * img.width + x) * 4); counts.set(k, (counts.get(k) ?? 0) + 1); }
+  let mode = 0, top = -1;
+  for (const [k, c] of counts) if (c > top) { top = c; mode = k; }
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let y = 0; y < img.height; y += step)
+    for (let x = 0; x < img.width; x += step) {
+      const i = (y * img.width + x) * 4;
+      if (!inFrame(x, y) || key(i) !== mode) continue;
+      r += img.data[i]; g += img.data[i + 1]; b += img.data[i + 2]; n++;
+    }
+  return [r / n, g / n, b / n];
+}
+
 /** Paper colour difference (0–255) above which a pixel counts as part of a stamp design. */
 const DESIGN_CONTRAST = 40;
 /** A column/row is a gutter candidate when less than this fraction of it is design. */
 const GUTTER_MAX_DESIGN = 0.15;
-/** On covers, stamps' white margins blend into the envelope; grow found designs by this × shorter side. */
-const COVER_MARGIN = 0.1;
+/** Stamps' white margins blend into a white envelope/sheet; grow found designs by this × shorter side. */
+const SHEET_MARGIN = 0.1;
 
 /**
  * Stamps inside one item, in coordinates relative to the item.
  * Blocks/singles: split along perforation gutters (≥ 2 boxes for a block, [] for a single).
- * Covers: rectangles that stand out from the envelope, upper-right ones first.
+ * Sheets/covers: rectangles that stand out from the sheet/envelope, upper-right ones first.
  */
 export async function detectInner(item: RgbaImage, kind: ItemKind = 'single'): Promise<Box[]> {
-  if (kind === 'cover') {
+  if (kind === 'sheet' || kind === 'cover') {
     const cv = await getCv();
-    const found = findRectangles(cv, item, 0.005)
+    const found = dropContained(findRectangles(cv, item, 0.005))
       .filter((b) => b.w * b.h < 0.8 * item.width * item.height)
       .map((b) => {
-        const m = Math.round(COVER_MARGIN * Math.min(b.w, b.h));
+        const m = Math.round(SHEET_MARGIN * Math.min(b.w, b.h));
         const x0 = Math.max(0, b.x - m), y0 = Math.max(0, b.y - m);
         return { x: x0, y: y0, w: Math.min(item.width, b.x + b.w + m) - x0, h: Math.min(item.height, b.y + b.h + m) - y0 };
       });
@@ -59,7 +236,7 @@ export async function detectInner(item: RgbaImage, kind: ItemKind = 'single'): P
 }
 
 function gridSplit(img: RgbaImage): Box[] {
-  const paper = backgroundColour(img);
+  const paper = frameColour(img);
   const { width: w, height: h } = img;
   const colDesign = new Float32Array(w), rowDesign = new Float32Array(h);
   for (let y = 0; y < h; y++)
@@ -77,6 +254,19 @@ function gridSplit(img: RgbaImage): Box[] {
   for (let r = 0; r < ys.length - 1; r++)
     for (let c = 0; c < xs.length - 1; c++) cells.push({ x: xs[c], y: ys[r], w: xs[c + 1] - xs[c], h: ys[r + 1] - ys[r] });
   return cells;
+}
+
+/** Median colour of a thin frame around the image — a stamp's paper margin. */
+function frameColour(img: RgbaImage): [number, number, number] {
+  const t = Math.max(2, Math.round(Math.min(img.width, img.height) * 0.02));
+  const ch: number[][] = [[], [], []];
+  for (let y = 0; y < img.height; y++)
+    for (let x = 0; x < img.width; x++)
+      if (x < t || y < t || x >= img.width - t || y >= img.height - t) {
+        const i = (y * img.width + x) * 4;
+        ch[0].push(img.data[i]); ch[1].push(img.data[i + 1]); ch[2].push(img.data[i + 2]);
+      }
+  return ch.map((v) => { v.sort((a, b) => a - b); return v[v.length >> 1]; }) as [number, number, number];
 }
 
 /** Centres of interior low-design runs (gutters), merging runs split by ≤ 3 perforation-hole columns. */
@@ -99,68 +289,6 @@ function gutterCentres(profile: Float32Array): number[] {
     if (c - (centres[centres.length - 1] ?? 0) >= minCell && n - c >= minCell) centres.push(c);
   }
   return centres;
-}
-
-/** Axis-aligned boxes of rectangular regions that stand out from the background. */
-export function findRectangles(cv: CV, img: RgbaImage, minAreaFraction: number): Box[] {
-  const bg = backgroundColour(img);
-  const src = cv.matFromImageData(img);
-  const diff = new cv.Mat(img.height, img.width, cv.CV_8UC1);
-  const d = diff.data as Uint8Array;
-  for (let p = 0, i = 0; p < d.length; p++, i += 4) {
-    d[p] = Math.max(
-      Math.abs(img.data[i] - bg[0]),
-      Math.abs(img.data[i + 1] - bg[1]),
-      Math.abs(img.data[i + 2] - bg[2]),
-    );
-  }
-  src.delete();
-
-  cv.GaussianBlur(diff, diff, new cv.Size(5, 5), 0);
-  const mask = new cv.Mat();
-  const otsu = cv.threshold(diff, mask, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-  if (otsu < MIN_CONTRAST) cv.threshold(diff, mask, MIN_CONTRAST, 255, cv.THRESH_BINARY);
-  diff.delete();
-
-  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-  cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
-  kernel.delete();
-
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
-  cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-  mask.delete();
-  hierarchy.delete();
-
-  const minArea = minAreaFraction * img.width * img.height;
-  const out: Box[] = [];
-  for (let k = 0; k < contours.size(); k++) {
-    const c = contours.get(k);
-    const rr = cv.minAreaRect(c);
-    const rrArea = rr.size.width * rr.size.height;
-    if (rrArea >= minArea && cv.contourArea(c) / rrArea >= MIN_FILL) {
-      const r = cv.boundingRect(c);
-      out.push({ x: r.x, y: r.y, w: r.width, h: r.height });
-    }
-    c.delete();
-  }
-  contours.delete();
-  return out;
-}
-
-/** Median colour of a thin frame around the image — the album page behind the stamps. */
-function backgroundColour(img: RgbaImage): [number, number, number] {
-  const t = Math.max(2, Math.round(Math.min(img.width, img.height) * 0.02));
-  const ch: number[][] = [[], [], []];
-  const step = Math.max(1, Math.floor((img.width + img.height) / 2000));
-  const push = (x: number, y: number) => {
-    const i = (y * img.width + x) * 4;
-    ch[0].push(img.data[i]); ch[1].push(img.data[i + 1]); ch[2].push(img.data[i + 2]);
-  };
-  for (let y = 0; y < img.height; y += step)
-    for (let x = 0; x < img.width; x += step)
-      if (x < t || y < t || x >= img.width - t || y >= img.height - t) push(x, y);
-  return ch.map((v) => { v.sort((a, b) => a - b); return v[v.length >> 1]; }) as [number, number, number];
 }
 
 function toOriginal(b: Box, scale: number, img: { width: number; height: number }): Box {
@@ -189,10 +317,10 @@ function median(v: number[]): number {
 
 function classify(boxes: Box[]): Detected[] {
   if (boxes.length === 0) return [];
-  const ref = median(boxes.map((b) => Math.max(b.w, b.h)));
+  const ref = median(boxes.map((b) => b.w * b.h));
   return boxes.map((box) => {
-    const longer = Math.max(box.w, box.h), aspect = longer / Math.min(box.w, box.h);
-    const kind: ItemKind = longer >= 3 * ref && aspect >= 1.3 && aspect <= 2.6 ? 'cover' : 'single';
+    const aspect = Math.max(box.w, box.h) / Math.min(box.w, box.h);
+    const kind: ItemKind = box.w * box.h >= SHEET_AREA * ref && aspect <= 2.6 ? 'sheet' : 'single';
     return { box, kind, inner: [] };
   });
 }

@@ -50,11 +50,27 @@ describe('detectItems', () => {
     found.forEach((d, i) => near(d.box, { x: GRID[i].x * s, y: GRID[i].y * s, w: GRID[i].w * s, h: GRID[i].h * s }, 0.02 * GRID[i].h * s));
   }, 60000);
 
+  it('separates two overlapping stamps offset vertically', async () => {
+    const page = blankImage(1200, 1600, PAGE_BG);
+    drawStamp(page, { x: 300, y: 400, w: 240, h: 300 }, [40, 70, 160]);
+    drawStamp(page, { x: 530, y: 440, w: 240, h: 300 }, [160, 50, 40]);
+    const found = await detectItems(page);
+    expect(found).toHaveLength(2);
+  });
+
+  it('ignores a light page-edge strip along one side', async () => {
+    const page = blankImage(1200, 1600, PAGE_BG);
+    drawRect(page, { x: 1080, y: 0, w: 120, h: 1600 }, [150, 150, 155]);
+    GRID.forEach((b) => drawStamp(page, b));
+    const found = await detectItems(page);
+    expect(found).toHaveLength(6);
+  });
+
   it('returns an empty list for a blank page', async () => {
     expect(await detectItems(blankImage(1200, 1600, PAGE_BG))).toEqual([]);
   });
 
-  it('classifies an envelope-sized item as a cover', async () => {
+  it('classifies an envelope- or souvenir-sheet-sized item as a sheet', async () => {
     const page = blankImage(1200, 1600, PAGE_BG);
     drawRect(page, { x: 150, y: 150, w: 900, h: 500 }, [232, 228, 218]);
     drawStamp(page, { x: 150, y: 900, w: 120, h: 150 });
@@ -62,7 +78,7 @@ describe('detectItems', () => {
     drawStamp(page, { x: 750, y: 900, w: 120, h: 150 });
     const found = await detectItems(page);
     expect(found).toHaveLength(4);
-    expect(found[0].kind).toBe('cover');
+    expect(found[0].kind).toBe('sheet');
     expect(found.slice(1).map((d) => d.kind)).toEqual(['single', 'single', 'single']);
   });
 });
@@ -114,7 +130,7 @@ describe('inner stamps', () => {
     drawStamp(page, stamp, [160, 50, 40]);
     for (const b of [{ x: 150, y: 900, w: 120, h: 150 }, { x: 450, y: 900, w: 120, h: 150 }]) drawStamp(page, b);
     const found = await detectItems(page);
-    const cover = found.find((d) => d.kind === 'cover')!;
+    const cover = found.find((d) => d.kind === 'sheet')!;
     expect(cover).toBeDefined();
     expect(cover.inner).toHaveLength(1);
     const b = cover.inner[0];
