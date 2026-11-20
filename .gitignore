@@ -2,3 +2,4 @@ test-photos/
 .DS_Store
 node_modules/
 dist/
+trial-output/
