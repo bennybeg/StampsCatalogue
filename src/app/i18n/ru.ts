@@ -82,4 +82,7 @@ export const ru = {
   working: 'Минутку…',
   move: 'Переложить',
   moveTitle: 'Переложить в другое место',
+  addFrame: '＋ Рамка',
+  dragFrameHint: 'Перетащите рамку на марку и потяните за углы',
+  findingStampsPct: 'Ищу марки… {pct}%',
 };

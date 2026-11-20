@@ -1,0 +1,116 @@
+import type { Detected } from './detect';
+import type { Box, RgbaImage } from './image';
+
+/** Post-processing of SlimSAM masks into stamp boxes. Pure; no model here. */
+
+export type SamCand = Box & { score: number };
+export type MaskInfo = { box: Box; fill: number };
+
+const MASK = 256;
+export const MIN_IOU = 0.85;
+export const MIN_FILL = 0.85;
+const MIN_AREA = 0.002, MAX_AREA = 0.3, MAX_ASPECT = 3.5;
+
+function overlap(a: Box, b: Box): number {
+  const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  return ix * iy;
+}
+export const iou = (a: Box, b: Box) => { const i = overlap(a, b); return i / (a.w * a.h + b.w * b.h - i); };
+/** Fraction of `a` that lies inside `b`. */
+export const insideOf = (a: Box, b: Box) => overlap(a, b) / (a.w * a.h);
+
+/** Bounding box (scaled by `scale`) and fill of `mask > 0` within the valid region of one 256×256 mask. */
+export function maskBox(mask: Float32Array, offset: number, validW: number, validH: number, scale: number): MaskInfo | null {
+  let x0 = MASK, y0 = MASK, x1 = -1, y1 = -1, n = 0;
+  for (let y = 0; y < validH; y++)
+    for (let x = 0; x < validW; x++)
+      if (mask[offset + y * MASK + x] > 0) { n++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x1 < 0) return null;
+  const w = x1 - x0 + 1, h = y1 - y0 + 1;
+  return { box: { x: x0 * scale, y: y0 * scale, w: w * scale, h: h * scale }, fill: n / (w * h) };
+}
+
+/** Confident, rectangular, stamp-sized, not a sliver. */
+export function isStampLike(m: MaskInfo, iouScore: number, imgW: number, imgH: number): boolean {
+  const area = (m.box.w * m.box.h) / (imgW * imgH);
+  const aspect = Math.max(m.box.w, m.box.h) / Math.min(m.box.w, m.box.h);
+  return iouScore >= MIN_IOU && m.fill >= MIN_FILL && area >= MIN_AREA && area <= MAX_AREA && aspect <= MAX_ASPECT;
+}
+
+/** Empty album strip: dark and flat (sampled every 3 px). */
+export function isEmptyStrip(img: RgbaImage, b: Box): boolean {
+  let n = 0, s = 0, s2 = 0;
+  for (let y = Math.max(0, b.y); y < Math.min(img.height, b.y + b.h); y += 3)
+    for (let x = Math.max(0, b.x); x < Math.min(img.width, b.x + b.w); x += 3) {
+      const i = (y * img.width + x) * 4, v = (img.data[i] + img.data[i + 1] + img.data[i + 2]) / 3;
+      n++; s += v; s2 += v * v;
+    }
+  if (!n) return true;
+  const mean = s / n;
+  return mean < 110 && Math.sqrt(Math.max(0, s2 / n - mean * mean)) < 18;
+}
+
+/**
+ * A stamp's picture inside its paper border is 1.15–1.85× smaller than the whole stamp (margins of
+ * roughly 7–15% per side); a pair of stamps is ≥ 2× one stamp.
+ */
+const BORDER_GROWTH_MIN = 1.15, BORDER_GROWTH_MAX = 1.85;
+/**
+ * A paper border surrounds the picture on all sides, roughly evenly; a neighbouring stamp sits on one
+ * side only. So: each side margin ≥ 2% of the outer box, and opposite margins within 3:1.
+ */
+const centred = (inner: Box, outer: Box) => {
+  const l = inner.x - outer.x, r = outer.x + outer.w - (inner.x + inner.w);
+  const t = inner.y - outer.y, b = outer.y + outer.h - (inner.y + inner.h);
+  const even = (a: number, c: number, size: number) => Math.min(a, c) >= 0.02 * size && Math.max(a, c) <= 3 * Math.min(a, c);
+  return even(l, r, outer.w) && even(t, b, outer.h);
+};
+const enclosedBy = (inner: Box, outer: Box) => {
+  const r = (outer.w * outer.h) / (inner.w * inner.h);
+  return r >= BORDER_GROWTH_MIN && r <= BORDER_GROWTH_MAX && insideOf(inner, outer) >= 0.9 && centred(inner, outer);
+};
+
+/**
+ * Drop stamp pictures whose whole stamp (with border) is also a candidate, then non-max suppression,
+ * then drop rows/strips (boxes holding ≥ 2 stamps) and remaining parts of a stamp.
+ */
+export function pickStamps(cands: SamCand[]): Box[] {
+  const whole = cands.filter((c) => !cands.some((o) => o !== c && enclosedBy(c, o)));
+  const kept: SamCand[] = [];
+  for (const c of [...whole].sort((a, b) => b.score - a.score)) if (!kept.some((k) => iou(k, c) > 0.6)) kept.push(c);
+  const noRows = kept.filter((c) => kept.filter((o) => o !== c && insideOf(o, c) > 0.85).length < 2);
+  return noRows
+    .filter((c) => !noRows.some((o) => o !== c && o.w * o.h > c.w * c.h * 1.15 && insideOf(c, o) > 0.85))
+    .map(({ x, y, w, h }) => ({ x, y, w, h }));
+}
+
+/**
+ * For a tap: the smallest of SAM's (up to 3) masks that looks like a stamp — grown once to an
+ * enclosing mask when that is the same stamp with its paper border (not a pair of stamps).
+ */
+export function bestPointBox(masks: (MaskInfo & { iou: number })[], imgW: number, imgH: number): Box | null {
+  const ok = masks.filter((m) => isStampLike(m, m.iou, imgW, imgH)).sort((a, b) => a.box.w * a.box.h - b.box.w * b.box.h);
+  if (!ok.length) return null;
+  const withBorder = ok.slice(1).find((m) => enclosedBy(ok[0].box, m.box));
+  return (withBorder ?? ok[0]).box;
+}
+
+/**
+ * Classical detections stay as they are, except a "single" or unresolved box that SAM split into two or
+ * more stamps (touching stamps — what SAM is for): those stamps replace it. Other SAM boxes not already
+ * covered by a classical item are added as singles.
+ */
+export function mergeDetections(classical: Detected[], sam: Box[]): Detected[] {
+  const out: Detected[] = [];
+  for (const d of classical) {
+    const parts = sam.filter((b) => insideOf(b, d.box) > 0.85);
+    if ((d.unresolved || d.kind === 'single') && parts.length >= 2) out.push(...parts.map((b) => ({ box: b, kind: 'single' as const, inner: [] })));
+    else out.push(d);
+  }
+  for (const b of sam) {
+    if (out.some((d) => iou(d.box, b) > 0.5 || insideOf(b, d.box) > 0.85)) continue;
+    out.push({ box: b, kind: 'single', inner: [] });
+  }
+  return out;
+}

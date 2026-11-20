@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RgbaImage } from '../../core/image';
 import { planPageSave, type Known, type Proposal } from '../../core/savePlan';
 import { getItem, listByPage, listUnfiled, loadIndex } from '../../db/db';
-import { BoxEditor, type EditBox } from '../components/BoxEditor';
+import { BoxEditor, defaultBoxAt, type EditBox } from '../components/BoxEditor';
 import { useT } from '../i18n';
 import { useServices } from '../services';
 import { applyProposals, buildCandidates, parsePageNumber, type CandidateWithCrops } from '../savePage';
@@ -10,7 +10,7 @@ import { BlobImg } from '../components/BlobImg';
 
 type Step =
   | { s: 'form' }
-  | { s: 'detecting' }
+  | { s: 'detecting'; pct: number }
   | { s: 'editing' }
   | { s: 'describing'; done: number; total: number }
   | { s: 'confirm'; cands: CandidateWithCrops[]; proposals: Proposal[]; known: Map<string, Blob> }
@@ -26,6 +26,12 @@ export function PageCapture({ go }: { go(path: string): void }) {
   const [photo, setPhoto] = useState<RgbaImage | null>(null);
   const [photoUrl, setPhotoUrl] = useState('');
   const [boxes, setBoxes] = useState<EditBox[]>([]);
+  const [selectKey, setSelectKey] = useState<string | undefined>();
+  const addBox = (box: EditBox['box']) => {
+    const key = `m${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+    setBoxes((cur) => [...cur, { key, box, kind: 'single', inner: [] }]);
+    setSelectKey(key);
+  };
   const [rejected, setRejected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false); // guards taps that arrive before React re-renders
@@ -33,26 +39,38 @@ export function PageCapture({ go }: { go(path: string): void }) {
 
   useEffect(() => () => { if (photoUrl) URL.revokeObjectURL(photoUrl); }, [photoUrl]);
 
+  const runRef = useRef(0);
   const onFile = async (file: File | undefined) => {
     if (!file) return;
-    setStep({ s: 'detecting' });
+    const run = ++runRef.current; // a newer photo makes this run's results stale
+    const current = () => run === runRef.current;
+    setStep({ s: 'detecting', pct: 0 });
     try {
       const img = await svc.decode(file);
+      if (!current()) return;
+      const found = await svc.recognizer.detect(img, (f) => { if (current()) setStep({ s: 'detecting', pct: Math.round(f * 100) }); });
+      if (!current()) return;
       setPhoto(img);
       setPhotoUrl(URL.createObjectURL(file));
-      const found = await svc.recognizer.detect(img);
       setBoxes(found.map((d, i) => ({ key: String(i), box: d.box, kind: d.kind, inner: d.inner, unresolved: d.unresolved })));
       setStep({ s: 'editing' });
     } catch (e) {
+      if (!current()) return;
       console.error(e);
       setStep({ s: 'error', msg: t('errorGeneric') });
     }
   };
 
+  const snapping = useRef(false); // taps while one is being outlined are ignored
+  const [snapBusy, setSnapBusy] = useState(false);
   const onTapEmpty = async (x: number, y: number) => {
-    if (!photo) return;
+    if (!photo || snapping.current) return;
+    snapping.current = true; setSnapBusy(true);
+    try {
+    // A snug frame if the stamp's edges are found, otherwise a stamp-sized frame to adjust by hand.
     const b = await svc.recognizer.snap(photo, x, y).catch(() => null);
-    if (b) setBoxes((cur) => [...cur, { key: `t${Date.now()}`, box: b, kind: 'single', inner: [] }]);
+    addBox(b ?? defaultBoxAt(x, y, boxes, photo.width, photo.height));
+    } finally { snapping.current = false; setSnapBusy(false); }
   };
 
   const finish = async (cands: CandidateWithCrops[], proposals: Proposal[]) => {
@@ -114,14 +132,16 @@ export function PageCapture({ go }: { go(path: string): void }) {
             <input type="file" accept="image/*" capture="environment" hidden aria-label={t('takePhoto')}
               disabled={album === null || page === null} onChange={(e) => onFile(e.target.files?.[0])} />
           </label>
-          {step.s === 'detecting' && <p>{t('findingStamps')}</p>}
+          {step.s === 'detecting' && <p>{t('findingStampsPct', { pct: step.pct })}</p>}
         </>
       )}
       {step.s === 'editing' && photo && (
         <>
           <p className="muted">{t('albumLabel')} {album} · {t('pageLabel')} {page}</p>
           {boxes.length === 0 && <p>{t('noStampsFound')}</p>}
-          <BoxEditor photoUrl={photoUrl} width={photo.width} height={photo.height} boxes={boxes} mode="edit" onChange={setBoxes} onTapEmpty={onTapEmpty} />
+          <BoxEditor photoUrl={photoUrl} width={photo.width} height={photo.height} boxes={boxes} mode="edit" onChange={setBoxes} onTapEmpty={onTapEmpty} selectKey={selectKey} />
+          <button className="big" onClick={() => addBox(defaultBoxAt(photo.width / 2, photo.height / 2, boxes, photo.width, photo.height))}>{t('addFrame')}</button>
+          <p className="muted">{snapBusy ? t('working') : t('dragFrameHint')}</p>
           {hasUnresolved && <p className="banner">{t('splitFirst')}</p>}
           <button className="big primary" disabled={hasUnresolved || boxes.length === 0} onClick={onSave}>{t('save')}</button>
         </>

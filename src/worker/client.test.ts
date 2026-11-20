@@ -15,6 +15,8 @@ const base = {
   snap: async () => null,
   describe: async () => ({ embedding: new Float32Array(3), color: new Float32Array(72) }),
   warmUp: async () => {},
+  quickDetect: async () => [],
+  disableSam: async () => {},
 };
 
 describe('recognizer RPC', () => {
@@ -49,5 +51,34 @@ describe('recognizer RPC', () => {
     const port = { postMessage() {}, onmessage: null };
     const rec = createRecognizer(port, { timeoutMs: 20 });
     await expect(rec.detect(img)).rejects.toThrow('timeout');
+  });
+
+  it('forwards progress reports to the caller before the result', async () => {
+    const seen: number[] = [];
+    const { rec, close } = pair({ ...base, detect: async (_i, onProgress) => { onProgress?.(0.25); onProgress?.(0.75); return []; } });
+    expect(await rec.detect(img, (f) => seen.push(f))).toEqual([]);
+    expect(seen).toEqual([0.25, 0.75]);
+    close();
+  });
+
+  it('restarts the worker after a fatal engine error (e.g. out of memory)', async () => {
+    let dead = 0;
+    const ch = new MessageChannel();
+    ch.port1.onmessage = (e) => ch.port1.postMessage({ id: e.data.id, ok: false, error: 'Aborted()', fatal: true });
+    const rec = createRecognizer(ch.port2, { onDead: () => dead++ });
+    await expect(rec.detect(img)).rejects.toThrow();
+    expect(dead).toBe(1);
+    ch.port1.close(); ch.port2.close();
+  });
+
+  it('keeps waiting while progress keeps arriving', async () => {
+    const ch = new MessageChannel();
+    ch.port1.onmessage = async (e) => {
+      for (let i = 1; i <= 4; i++) { await new Promise((r) => setTimeout(r, 15)); ch.port1.postMessage({ id: e.data.id, progress: i / 4 }); }
+      ch.port1.postMessage({ id: e.data.id, ok: true, value: [] });
+    };
+    const rec = createRecognizer(ch.port2, { timeoutMs: 40 });
+    await expect(rec.detect(img, () => {})).resolves.toEqual([]);
+    ch.port1.close(); ch.port2.close();
   });
 });

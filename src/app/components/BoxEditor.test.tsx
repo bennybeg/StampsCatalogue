@@ -55,4 +55,9 @@ describe('BoxEditor', () => {
     expect(onPick).toHaveBeenCalledWith(boxes[0]);
     expect(screen.queryByRole('button', { name: ru.delete })).toBeNull();
   });
+
+  it('selects the box named by selectKey (a frame just added)', () => {
+    setup({ selectKey: 'b' });
+    expect(screen.getByRole('button', { name: ru.delete })).toBeTruthy();
+  });
 });

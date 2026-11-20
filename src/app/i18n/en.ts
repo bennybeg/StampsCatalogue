@@ -83,4 +83,7 @@ export const en: Record<keyof typeof ru, string> = {
   working: 'One moment…',
   move: 'Move',
   moveTitle: 'Move to another place',
+  addFrame: '＋ Frame',
+  dragFrameHint: 'Drag the frame onto the stamp and pull its corners',
+  findingStampsPct: 'Looking for stamps… {pct}%',
 };
