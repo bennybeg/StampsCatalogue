@@ -1,10 +1,15 @@
 import { useMemo } from 'react';
 import { I18nProvider } from './i18n';
 import { useRoute } from './router';
-import { ServicesProvider, type Services } from './services';
+import { ServicesProvider, useServices, type Services } from './services';
 import { Home } from './screens/Home';
 import { PageCapture } from './screens/PageCapture';
 import { Check } from './screens/Check';
+import { Unfiled } from './screens/Unfiled';
+import { Browse } from './screens/Browse';
+import { ItemDetail } from './screens/ItemDetail';
+import { countUnfiled } from '../db/db';
+import { useAsync } from './useAsync';
 import { openStampDb, type StampDb } from '../db/db';
 import { getRecognizer, type Recognizer } from '../worker/client';
 import { fileToRgba, rgbaToJpeg } from './imageio';
@@ -27,15 +32,29 @@ function realServices(): Services {
   };
 }
 
+function HomeWithCount({ go }: { go(path: string): void }) {
+  const svc = useServices();
+  const { value } = useAsync(async () => countUnfiled(await svc.getDb()), []);
+  return <Home go={go} unfiledCount={value ?? 0} />;
+}
+
 function Screens() {
-  const { route, go } = useRoute();
+  const { route, params, go } = useRoute();
   switch (route) {
+    case '/unfiled':
+      return <Unfiled go={go} />;
+    case '/browse':
+    case '/browse/:album':
+    case '/browse/:album/:page':
+      return <Browse key={route + JSON.stringify(params)} go={go} params={params} />;
+    case '/item/:id':
+      return <ItemDetail go={go} id={params.id} />;
     case '/page':
       return <PageCapture go={go} />;
     case '/check':
       return <Check go={go} />;
     default:
-      return <Home go={go} />;
+      return <HomeWithCount go={go} />;
   }
 }
 
