@@ -4,7 +4,7 @@ import { createEmbedder } from '../core/embed';
 import { colorSignature } from '../core/color';
 import { getCv } from '../core/cv';
 import { createSegmenter, samBoxAt, samFindStamps } from '../core/sam';
-import { mergeDetections } from '../core/samPick';
+import { isEmptyStrip, mergeDetections } from '../core/samPick';
 import type { Box, RgbaImage } from '../core/image';
 
 export const MODEL_ID = 'Xenova/dinov2-small';
@@ -28,6 +28,9 @@ type Deps = {
   describe(img: RgbaImage): Promise<{ embedding: Float32Array; color: Float32Array }>;
 };
 
+/** Single boxes on empty dark album strip are noise, whichever method produced them. */
+const dropEmptyStrip = (img: RgbaImage, items: Detected[]) => items.filter((it) => it.kind !== 'single' || !isEmptyStrip(img, it.box));
+
 /**
  * Detection = the fast classical detector plus SlimSAM (which separates touching stamps), merged.
  * SlimSAM is an improvement, never a requirement: if it fails, the classical result stands.
@@ -39,10 +42,10 @@ export function makeHandlers(d: Deps): Handlers {
       onProgress?.(0.05);
       try {
         const sam = await d.samFindStamps(img, (f) => onProgress?.(0.05 + 0.95 * f));
-        return mergeDetections(classical, sam);
+        return dropEmptyStrip(img, mergeDetections(classical, sam));
       } catch (e) {
         console.warn('SlimSAM unavailable, classical detection only', e);
-        return classical;
+        return dropEmptyStrip(img, classical);
       }
     },
     quickDetect: (img) => d.detectItems(img),

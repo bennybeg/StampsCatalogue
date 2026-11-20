@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { makeHandlers } from './handlers';
 
-const img = { width: 100, height: 100, data: new Uint8ClampedArray(40000) };
+const img = { width: 100, height: 100, data: new Uint8ClampedArray(40000).fill(200) }; // light, not empty strip
 const classical = [{ box: { x: 0, y: 0, w: 30, h: 40 }, kind: 'single' as const, inner: [] }];
 const deps = (sam: Partial<Parameters<typeof makeHandlers>[0]>) => makeHandlers({
   detectItems: async () => classical,
@@ -30,5 +30,11 @@ describe('worker handlers', () => {
   });
   it('warms up even when SlimSAM cannot load', async () => {
     await expect(deps({ warmSam: async () => { throw new Error('offline'); } }).warmUp()).resolves.toBeUndefined();
+  });
+
+  it('drops boxes on empty dark album strip, whichever method found them', async () => {
+    const dark = { width: 100, height: 100, data: new Uint8ClampedArray(40000).map((_, i) => (i % 4 === 3 ? 255 : 50)) };
+    const h = deps({ samFindStamps: async () => [{ x: 50, y: 50, w: 30, h: 40 }] });
+    expect(await h.detect(dark)).toEqual([]);
   });
 });
