@@ -92,3 +92,25 @@ globe stamp scored 0.60 against a Hungarian Luna stamp with a similar globe-on-b
 3. Club check: when the photo contains several stamps, he taps the one he means.
 4. Model download: 24 MB once.
 5. Re-run this trial on **full-resolution** photos from his phone (not WhatsApp copies) before tuning further.
+
+## Full-resolution phone photos (4 pages, added later)
+
+Original phone photos (3000×4000) of real album pages show conditions the WhatsApp set did not:
+table and a catalogue in frame, handwritten price notes tucked over stamps, stamps overlapping in
+strips, a light (cream) album page, a printed album page with stamps mounted on it.
+
+- **Detection is unreliable here**: roughly 6/12, ~10/25, ~1/10 and ~0/7 stamps boxed correctly.
+  Joined pairs come out as one box; the table and the catalogue are "detected"; the light page
+  defeats the page-colour approach entirely.
+- **Cross-photo matching** (the first real test: the same Bulgarian 1959 rocket and 80 st
+  stamps appear on two different photos) **failed**: the counterparts were a pair cut as one box
+  or half covered by a price note, and did not reach the top 5.
+
+### Conclusion for the app
+
+Automatic whole-page detection should not be the primary setup method. Recommended instead:
+**tap-to-select** — he photographs the page, taps each stamp, and the app snaps a box to that
+stamp (a local search around the tap is far easier than the whole page; a small "segment from a
+tap" model is an option if the classical snap isn't good enough). He sees and can adjust each
+box before it's saved. Matching quality then depends on clean single-stamp crops, which this
+guarantees. Automatic detection can stay as a "suggest boxes" helper.

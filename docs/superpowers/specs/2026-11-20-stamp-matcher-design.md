@@ -194,3 +194,17 @@ reading step can be added later on top of A.
   photos are taken (through sleeves or stock cards).
 - Matching a single stamp against stamps inside blocks and covers depends on
   finding the inner stamps well.
+
+## Decisions from the recognition trial (2026-11-20)
+
+See `docs/superpowers/trial-results.md`. Approved by the user: continue with automatic detection
+as the first pass, with correction.
+
+- Model: DINOv2-small (q8, ~24 MB, one-time download), colour weight 0.5.
+- Item kinds: single / block / **sheet** (souvenir sheet) / cover. The detector proposes "sheet"
+  for large items; he can change it to cover.
+- Page correction screen gains **tap-to-add** (tap a missed stamp, the app snaps a box to it) and
+  shows **"needs splitting"** items (touching stamps the detector couldn't cut) for him to fix.
+- At the club, if the photo shows several stamps, he taps the one he means.
+- The comparison view shows an automatic **"edges differ"** hint (perforated vs imperforate).
+- No yes/no from a score threshold: always the top 5 with pictures.
