@@ -7,4 +7,11 @@ export const ru = {
   homeBackup: 'Резервная копия',
   switchLanguage: 'English',
   back: 'Назад',
+  delete: 'Удалить',
+  kindSingle: 'Марка',
+  kindBlock: 'Блок',
+  kindSheet: 'Лист',
+  kindCover: 'Конверт',
+  needsSplit: 'Разделите вручную',
+  tapToAddHint: 'Нажмите на пропущенную марку, чтобы добавить её',
 };
