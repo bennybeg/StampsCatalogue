@@ -16,7 +16,11 @@ const cache = new Map<string, Promise<Embedder>>();
 export function createEmbedder(modelId: string, opts: { quantized?: boolean } = {}): Promise<Embedder> {
   const quantized = opts.quantized ?? true;
   const key = `${modelId}|${quantized}`;
-  if (!cache.has(key)) cache.set(key, load(modelId, quantized));
+  if (!cache.has(key)) {
+    // A failed load (e.g. offline on first run) must not stay cached, so a retry can succeed.
+    const p = load(modelId, quantized).catch((e) => { cache.delete(key); throw e; });
+    cache.set(key, p);
+  }
   return cache.get(key)!;
 }
 

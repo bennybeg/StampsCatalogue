@@ -1,0 +1,37 @@
+import { describe, it, expect } from 'vitest';
+import { serve } from './handlers';
+import { createRecognizer } from './client';
+
+const img = { width: 2, height: 2, data: new Uint8ClampedArray(16) };
+
+function pair(h: Parameters<typeof serve>[1]) {
+  const ch = new MessageChannel();
+  serve(ch.port1, h);
+  return { rec: createRecognizer(ch.port2), close: () => { ch.port1.close(); ch.port2.close(); } };
+}
+
+const base = {
+  detect: async () => [{ box: { x: 1, y: 2, w: 3, h: 4 }, kind: 'single' as const, inner: [] }],
+  snap: async () => null,
+  describe: async () => ({ embedding: new Float32Array(3), color: new Float32Array(72) }),
+  warmUp: async () => {},
+};
+
+describe('recognizer RPC', () => {
+  it('returns handler results', async () => {
+    const { rec, close } = pair(base);
+    expect(await rec.detect(img)).toEqual([{ box: { x: 1, y: 2, w: 3, h: 4 }, kind: 'single', inner: [] }]);
+    close();
+  });
+  it('rejects with the handler error message', async () => {
+    const { rec, close } = pair({ ...base, snap: async () => { throw new Error('boom'); } });
+    await expect(rec.snap(img, 0, 0)).rejects.toThrow('boom');
+    close();
+  });
+  it('keeps concurrent calls apart', async () => {
+    const { rec, close } = pair({ ...base, snap: async (_i, x, y) => ({ x, y, w: 1, h: 1 }) });
+    const [a, b] = await Promise.all([rec.snap(img, 1, 1), rec.snap(img, 9, 9)]);
+    expect([a!.x, b!.x]).toEqual([1, 9]);
+    close();
+  });
+});

@@ -64,7 +64,7 @@ export async function detectItems(img: RgbaImage, opts: { workingMaxSide?: numbe
 }
 
 /** Axis-aligned boxes of rectangular regions that stand out from the background. */
-export function findRectangles(cv: CV, img: RgbaImage, minAreaFraction: number): Found[] {
+export function findRectangles(cv: CV, img: RgbaImage, minAreaFraction: number, fixedThreshold?: number): Found[] {
   const bg = backgroundColour(img);
   const diff = new cv.Mat(img.height, img.width, cv.CV_8UC1);
   const d = diff.data as Uint8Array;
@@ -73,8 +73,11 @@ export function findRectangles(cv: CV, img: RgbaImage, minAreaFraction: number):
   }
   cv.GaussianBlur(diff, diff, new cv.Size(3, 3), 0); // 3×3: a 5×5 blur fills 2–3 px gaps between stamps
   const mask = new cv.Mat();
-  const otsu = cv.threshold(diff, mask, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-  if (otsu < MIN_CONTRAST) cv.threshold(diff, mask, MIN_CONTRAST, 255, cv.THRESH_BINARY);
+  if (fixedThreshold !== undefined) cv.threshold(diff, mask, fixedThreshold, 255, cv.THRESH_BINARY);
+  else {
+    const otsu = cv.threshold(diff, mask, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    if (otsu < MIN_CONTRAST) cv.threshold(diff, mask, MIN_CONTRAST, 255, cv.THRESH_BINARY);
+  }
   diff.delete();
 
   const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
