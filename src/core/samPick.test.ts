@@ -71,3 +71,15 @@ describe('mergeDetections', () => {
     expect(out[1]).toEqual({ box: { x: 300, y: 0, w: 100, h: 120 }, kind: 'single', inner: [] });
   });
 });
+
+describe('stamp border preference', () => {
+  const design = { x: 27, y: 25, w: 169, h: 230 }, stamp = { x: 0, y: 0, w: 225, h: 276 }, pair = { x: 0, y: 0, w: 450, h: 276 };
+  it('pickStamps keeps the whole stamp, not only its picture, even when the picture scores higher', () => {
+    expect(pickStamps([{ ...design, score: 1 }, { ...stamp, score: 0.87 }])).toEqual([stamp]);
+  });
+  it('bestPointBox grows from the picture to the stamp around it, but not to a pair of stamps', () => {
+    const m = (b: typeof stamp, iou: number) => ({ box: b, fill: 0.97, iou });
+    expect(bestPointBox([m(pair, 0.9), m(stamp, 0.91), m(design, 1)], 1000, 1000)).toEqual(stamp);
+    expect(bestPointBox([m(pair, 0.9), m(design, 1)], 1000, 1000)).toEqual(design);
+  });
+});

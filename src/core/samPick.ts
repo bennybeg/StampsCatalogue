@@ -51,20 +51,39 @@ export function isEmptyStrip(img: RgbaImage, b: Box): boolean {
   return mean < 110 && Math.sqrt(Math.max(0, s2 / n - mean * mean)) < 18;
 }
 
-/** Non-max suppression, then drop rows/strips (boxes holding ≥ 2 stamps) and parts of a stamp. */
+/**
+ * A stamp's picture inside its paper border is 1.15–1.85× smaller than the whole stamp (margins of
+ * roughly 7–15% per side); a pair of stamps is ≥ 2× one stamp.
+ */
+const BORDER_GROWTH_MIN = 1.15, BORDER_GROWTH_MAX = 1.85;
+const enclosedBy = (inner: Box, outer: Box) => {
+  const r = (outer.w * outer.h) / (inner.w * inner.h);
+  return r >= BORDER_GROWTH_MIN && r <= BORDER_GROWTH_MAX && insideOf(inner, outer) >= 0.9;
+};
+
+/**
+ * Drop stamp pictures whose whole stamp (with border) is also a candidate, then non-max suppression,
+ * then drop rows/strips (boxes holding ≥ 2 stamps) and remaining parts of a stamp.
+ */
 export function pickStamps(cands: SamCand[]): Box[] {
+  const whole = cands.filter((c) => !cands.some((o) => o !== c && enclosedBy(c, o)));
   const kept: SamCand[] = [];
-  for (const c of [...cands].sort((a, b) => b.score - a.score)) if (!kept.some((k) => iou(k, c) > 0.6)) kept.push(c);
+  for (const c of [...whole].sort((a, b) => b.score - a.score)) if (!kept.some((k) => iou(k, c) > 0.6)) kept.push(c);
   const noRows = kept.filter((c) => kept.filter((o) => o !== c && insideOf(o, c) > 0.85).length < 2);
   return noRows
     .filter((c) => !noRows.some((o) => o !== c && o.w * o.h > c.w * c.h * 1.15 && insideOf(c, o) > 0.85))
     .map(({ x, y, w, h }) => ({ x, y, w, h }));
 }
 
-/** For a tap: the smallest of SAM's (up to 3) masks that looks like a stamp. */
+/**
+ * For a tap: the smallest of SAM's (up to 3) masks that looks like a stamp — grown once to an
+ * enclosing mask when that is the same stamp with its paper border (not a pair of stamps).
+ */
 export function bestPointBox(masks: (MaskInfo & { iou: number })[], imgW: number, imgH: number): Box | null {
   const ok = masks.filter((m) => isStampLike(m, m.iou, imgW, imgH)).sort((a, b) => a.box.w * a.box.h - b.box.w * b.box.h);
-  return ok[0]?.box ?? null;
+  if (!ok.length) return null;
+  const withBorder = ok.slice(1).find((m) => enclosedBy(ok[0].box, m.box));
+  return (withBorder ?? ok[0]).box;
 }
 
 /** Classical detections stay as they are; SAM boxes not already covered by one are added as singles. */
