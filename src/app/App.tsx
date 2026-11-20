@@ -4,6 +4,7 @@ import { useRoute } from './router';
 import { ServicesProvider, type Services } from './services';
 import { Home } from './screens/Home';
 import { PageCapture } from './screens/PageCapture';
+import { Check } from './screens/Check';
 import { openStampDb, type StampDb } from '../db/db';
 import { getRecognizer, type Recognizer } from '../worker/client';
 import { fileToRgba, rgbaToJpeg } from './imageio';
@@ -31,6 +32,8 @@ function Screens() {
   switch (route) {
     case '/page':
       return <PageCapture go={go} />;
+    case '/check':
+      return <Check go={go} />;
     default:
       return <Home go={go} />;
   }

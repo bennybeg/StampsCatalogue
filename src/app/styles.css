@@ -43,3 +43,7 @@ label { display: flex; flex-direction: column; gap: 4px; }
 .compare-pane figcaption { color: var(--muted); font-size: 0.9rem; }
 .compare-clip { flex: 1; overflow: hidden; border-radius: 10px; background: #0003; }
 .compare-clip img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.match-row { justify-content: flex-start; text-align: left; gap: 12px; }
+.query-img { max-height: 40vh; object-fit: contain; border-radius: 10px; align-self: center; }
+label.check { flex-direction: row; align-items: center; gap: 10px; }
+label.check input { width: 28px; height: 28px; min-height: 0; }
