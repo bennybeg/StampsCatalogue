@@ -3,7 +3,7 @@ import { crop, withMargin, type Box, type RgbaImage } from '../../core/image';
 import { rankMatches } from '../../core/match';
 import { edgesDiffer } from '../../core/edges';
 import { loadIndex, putItems } from '../../db/db';
-import { BoxEditor, type EditBox } from '../components/BoxEditor';
+import { BoxEditor, defaultBoxAt, type EditBox } from '../components/BoxEditor';
 import { BlobImg } from '../components/BlobImg';
 import { CompareView } from '../components/CompareView';
 import { useT } from '../i18n';
@@ -120,7 +120,10 @@ export function Check({ go }: { go(path: string): void }) {
           <p>{t('pickStamp')}</p>
           <BoxEditor photoUrl={step.url} width={step.photo.width} height={step.photo.height} boxes={step.boxes} mode="pick"
             onPick={(b) => search(step.photo, b.box)}
-            onTapEmpty={async (x, y) => { const b = await svc.recognizer.snap(step.photo, x, y).catch(() => null); if (b) search(step.photo, b); }} />
+            onTapEmpty={async (x, y) => {
+              const b = await svc.recognizer.snap(step.photo, x, y).catch(() => null);
+              search(step.photo, b ?? defaultBoxAt(x, y, step.boxes, step.photo.width, step.photo.height));
+            }} />
         </>
       )}
       {step.s === 'results' && (
