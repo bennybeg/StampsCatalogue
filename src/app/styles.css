@@ -1,0 +1,22 @@
+:root {
+  --bg: #f7f5f0; --fg: #1d1d1f; --muted: #6b6b70; --accent: #1f5fbf; --accent-fg: #fff;
+  --card: #fff; --border: #d9d6cf; --warn: #e07b00; --ok: #1e8e3e;
+  font-size: 18px; color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151517; --fg: #f2f2f2; --muted: #a0a0a6; --accent: #5b9dff; --accent-fg: #0b0b0c; --card: #1f1f22; --border: #34343a; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: system-ui, sans-serif; line-height: 1.4; }
+.screen { max-width: 640px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+h1 { font-size: 1.6rem; margin: 8px 0 12px; }
+button { font: inherit; min-height: 48px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--fg); padding: 10px 16px; cursor: pointer; }
+button.big { min-height: 64px; font-size: 1.15rem; text-align: left; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button.link { background: none; border: none; color: var(--accent); align-self: flex-start; }
+button:disabled { opacity: 0.5; }
+.badge { display: inline-block; min-width: 1.6em; padding: 0 6px; margin-left: 8px; border-radius: 999px; background: var(--warn); color: #fff; text-align: center; }
+input, select, textarea { font: inherit; min-height: 48px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--card); color: var(--fg); }
+.row { display: flex; gap: 8px; align-items: center; }
+.muted { color: var(--muted); }
+.banner { padding: 12px; border-radius: 12px; background: #fff3d6; color: #5a3d00; }
