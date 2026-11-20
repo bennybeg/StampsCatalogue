@@ -50,4 +50,12 @@ describe('recognizer RPC', () => {
     const rec = createRecognizer(port, { timeoutMs: 20 });
     await expect(rec.detect(img)).rejects.toThrow('timeout');
   });
+
+  it('forwards progress reports to the caller before the result', async () => {
+    const seen: number[] = [];
+    const { rec, close } = pair({ ...base, detect: async (_i, onProgress) => { onProgress?.(0.25); onProgress?.(0.75); return []; } });
+    expect(await rec.detect(img, (f) => seen.push(f))).toEqual([]);
+    expect(seen).toEqual([0.25, 0.75]);
+    close();
+  });
 });
