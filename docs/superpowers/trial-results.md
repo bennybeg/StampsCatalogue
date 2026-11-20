@@ -33,6 +33,15 @@ setup screen **must** make fixing it fast. Recommended for the app plan:
 - Delete/merge/split of boxes with one gesture.
 - Hide inner-stamp slivers under a minimum size (≥ 6% of the item's shorter side and aspect ≤ 2.5).
 
+### After code review
+
+Fixed with tests: thin gaps between stamps in full-resolution photos (working size 2400 px, lighter blur);
+diamond/triangle stamps kept (convex-hull check); chains of touching stamps returned as
+**unresolved** items for the user instead of silently dropped; a page photographed with the
+table around it; a lone cover recognised as a sheet by absolute size; a white band inside one
+stamp no longer splits it into a "block" (gutters must show perforation holes). Trade-off:
+imperforate joined strips are no longer split automatically.
+
 ## Matching
 
 Self-test: each of the 147 real stamp-sized crops was "re-photographed" (rotated 3°,
@@ -46,8 +55,11 @@ has no perspective distortion.
 | DINOv2-small | 24 MB | 25 ms | 0.0 | 44% * | 72% * |
 | DINOv2-small | 24 MB | 25 ms | 0.3 | 79.6% | 94.6% |
 | **DINOv2-small** | **24 MB** | **25 ms** | **0.5** | **84.4%** | **95.9%** |
+| DINOv2-small, after review fixes (162 crops) | 24 MB | 25 ms | 0.5 | 79.6% | 96.9% |
 
 \* measured over all 234 crops including junk slivers; the others are over the 147 real crops.
+The last row is after the code-review detection fixes: more stamps are found (162 real crops
+instead of 147), which adds more same-set look-alikes to the index; top-5 went up and top-1 went down.
 
 Search over 256 entries is ≪ 1 ms; 3000 entries benchmarked < 100 ms in the unit test.
 

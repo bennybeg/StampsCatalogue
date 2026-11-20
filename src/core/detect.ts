@@ -6,7 +6,9 @@ import { crop, resizeTo, type Box, type RgbaImage } from './image';
  * the user can relabel a sheet as 'cover'.
  */
 export type ItemKind = 'single' | 'block' | 'sheet' | 'cover';
-export type Detected = { box: Box; kind: ItemKind; inner: Box[] };
+/** `unresolved`: an irregular blob (e.g. a chain of touching stamps) the detector could not cut; the user must split it. */
+export type Detected = { box: Box; kind: ItemKind; inner: Box[]; unresolved?: boolean };
+type Found = Box & { unresolved?: boolean };
 
 /** Smallest item, as a fraction of the page area (at working resolution). */
 const MIN_AREA_FRACTION = 0.002;
@@ -24,6 +26,14 @@ const MIN_CONTRAST = 25;
 const CONTAINED = 0.9;
 /** Items at least this × the median item area (and not too elongated) are sheets/covers. */
 const SHEET_AREA = 5;
+/** ...or at least this fraction of the photo (a cover photographed alone or with one stamp). */
+const SHEET_PAGE_FRACTION = 0.1;
+/** A blob covering more than this fraction of the photo is the album page itself (table visible around it). */
+const PAGE_FRACTION = 0.5;
+/** An irregular blob filling at least this much of its convex hull is one non-rectangular stamp (diamond, triangle). */
+const HULL_FILL = 0.9;
+/** Default working resolution: high enough that a ~10 px gap in a 50 MP photo survives as ≥ 3 px. */
+const WORKING_MAX_SIDE = 2400;
 
 /**
  * Find stamps, blocks and sheets/covers on a photo of an album page.
@@ -31,10 +41,21 @@ const SHEET_AREA = 5;
  */
 export async function detectItems(img: RgbaImage, opts: { workingMaxSide?: number } = {}): Promise<Detected[]> {
   const cv = await getCv();
-  const { image: work, scale } = resizeTo(img, opts.workingMaxSide ?? 1600);
-  const boxes = findRectangles(cv, work, MIN_AREA_FRACTION).map((b) => toOriginal(b, scale, img));
-  const items = classify(dropContained(boxes));
+  const { image: work, scale } = resizeTo(img, opts.workingMaxSide ?? WORKING_MAX_SIDE);
+  let found = findRectangles(cv, work, MIN_AREA_FRACTION);
+  // The table is visible around the page: the page itself became one blob. Look again inside it.
+  const huge = (b: Found) => b.w * b.h > PAGE_FRACTION * work.width * work.height;
+  // An unresolved blob that big is glare/strips chaining half the page: useless to the user, drop it.
+  found = found.filter((b) => !(b.unresolved && huge(b)));
+  const page = found.find(huge);
+  if (page) {
+    const inside = findRectangles(cv, crop(work, page), MIN_AREA_FRACTION * (work.width * work.height) / (page.w * page.h));
+    if (inside.length) found = [...found.filter((b) => b !== page), ...inside.map((b) => ({ ...b, x: b.x + page.x, y: b.y + page.y }))];
+  }
+  const boxes = found.map((b) => ({ ...toOriginal(b, scale, img), unresolved: b.unresolved }));
+  const items = classify(dropContained(boxes), img.width * img.height);
   for (const item of items) {
+    if (item.unresolved) continue;
     const { image: sub, scale: s } = resizeTo(crop(img, item.box), 800);
     item.inner = (await detectInner(sub, item.kind)).map((b) => toOriginal(b, s, { width: item.box.w, height: item.box.h }));
     if (item.kind === 'single' && item.inner.length >= 2) item.kind = 'block';
@@ -43,14 +64,14 @@ export async function detectItems(img: RgbaImage, opts: { workingMaxSide?: numbe
 }
 
 /** Axis-aligned boxes of rectangular regions that stand out from the background. */
-export function findRectangles(cv: CV, img: RgbaImage, minAreaFraction: number): Box[] {
+export function findRectangles(cv: CV, img: RgbaImage, minAreaFraction: number): Found[] {
   const bg = backgroundColour(img);
   const diff = new cv.Mat(img.height, img.width, cv.CV_8UC1);
   const d = diff.data as Uint8Array;
   for (let p = 0, i = 0; p < d.length; p++, i += 4) {
     d[p] = Math.max(Math.abs(img.data[i] - bg[0]), Math.abs(img.data[i + 1] - bg[1]), Math.abs(img.data[i + 2] - bg[2]));
   }
-  cv.GaussianBlur(diff, diff, new cv.Size(5, 5), 0);
+  cv.GaussianBlur(diff, diff, new cv.Size(3, 3), 0); // 3×3: a 5×5 blur fills 2–3 px gaps between stamps
   const mask = new cv.Mat();
   const otsu = cv.threshold(diff, mask, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
   if (otsu < MIN_CONTRAST) cv.threshold(diff, mask, MIN_CONTRAST, 255, cv.THRESH_BINARY);
@@ -72,7 +93,7 @@ export function findRectangles(cv: CV, img: RgbaImage, minAreaFraction: number):
   const lab = labels.data32S as Int32Array;
   const st = stats.data32S as Int32Array;
   const minArea = minAreaFraction * img.width * img.height;
-  const out: Box[] = [];
+  const out: Found[] = [];
   for (let k = 1; k < n; k++) {
     const box = { x: st[k * 5], y: st[k * 5 + 1], w: st[k * 5 + 2], h: st[k * 5 + 3] };
     if (box.w * box.h < minArea) continue;
@@ -100,7 +121,7 @@ function blobMask(lab: Int32Array, stride: number, box: Box, k: number): Uint8Ar
  * Cut a blob of touching/overlapping items into rectangles. Where neighbouring items sit at
  * different heights (or widths), the blob's outline steps; cut at the biggest step and recurse.
  */
-function splitBlob(m: Uint8Array, box: Box, depth: number): Box[] {
+function splitBlob(m: Uint8Array, box: Box, depth: number): Found[] {
   const tight = tighten(m, box);
   if (!tight) return [];
   ({ m, box } = tight);
@@ -108,13 +129,45 @@ function splitBlob(m: Uint8Array, box: Box, depth: number): Box[] {
   for (let i = 0; i < m.length; i++) count += m[i];
   const fill = count / (box.w * box.h);
   if (fill >= RECT_FILL || depth >= 8) return [box];
-  // A sprawling blob (stamps chained by glare or strips) can't be cut reliably: leave it to the user.
-  if (fill < SPLIT_MIN_FILL) return [];
+  if (fill < SPLIT_MIN_FILL) {
+    // A diamond/triangle stamp fills its convex hull; a chain of touching stamps doesn't and is handed
+    // to the user. Leftovers of a cut (depth > 0) are slivers of a neighbour and are dropped.
+    if (count / hullArea(m, box.w, box.h) >= HULL_FILL) return [box];
+    return depth === 0 ? [{ ...box, unresolved: true }] : [];
+  }
 
   const cut = biggestStep(m, box.w, box.h, 'x') ?? biggestStep(m, box.w, box.h, 'y');
-  if (!cut) return fill >= MIN_FILL ? [box] : [];
+  if (!cut) return [box];
   const [a, b] = cut.axis === 'x' ? splitAt(m, box, cut.at, 'x') : splitAt(m, box, cut.at, 'y');
   return [...splitBlob(a.m, a.box, depth + 1), ...splitBlob(b.m, b.box, depth + 1)];
+}
+
+/** Area of the convex hull of a mask's set pixels (monotone chain over each row's end pixels). */
+function hullArea(m: Uint8Array, w: number, h: number): number {
+  const pts: [number, number][] = [];
+  for (let y = 0; y < h; y++) {
+    let l = -1, r = -1;
+    for (let x = 0; x < w; x++) if (m[y * w + x]) { if (l < 0) l = x; r = x; }
+    if (l >= 0) pts.push([l, y], [l, y + 1], [r + 1, y], [r + 1, y + 1]);
+  }
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o: number[], a: number[], b: number[]) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const half = (list: [number, number][]) => {
+    const hull: [number, number][] = [];
+    for (const p of list) {
+      while (hull.length >= 2 && cross(hull[hull.length - 2], hull[hull.length - 1], p) <= 0) hull.pop();
+      hull.push(p);
+    }
+    hull.pop();
+    return hull;
+  };
+  const poly = [...half(pts), ...half([...pts].reverse())];
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const [x1, y1] = poly[i], [x2, y2] = poly[(i + 1) % poly.length];
+    a += x1 * y2 - x2 * y1;
+  }
+  return Math.max(1, Math.abs(a) / 2);
 }
 
 /** Shrink a mask to the bounding box of its set pixels. */
@@ -269,22 +322,26 @@ function frameColour(img: RgbaImage): [number, number, number] {
   return ch.map((v) => { v.sort((a, b) => a - b); return v[v.length >> 1]; }) as [number, number, number];
 }
 
-/** Centres of interior low-design runs (gutters), merging runs split by ≤ 3 perforation-hole columns. */
+/**
+ * Centres of interior gutters between joined stamps: low-design runs that contain a line of
+ * perforation holes (≤ 3 columns of partial "design" splitting the run). A clean light band
+ * inside one stamp's design has no holes and is not a gutter.
+ */
 function gutterCentres(profile: Float32Array): number[] {
   const n = profile.length;
-  const runs: [number, number][] = [];
+  const runs: [number, number, boolean][] = [];
   for (let i = 0; i < n; ) {
     if (profile[i] >= GUTTER_MAX_DESIGN) { i++; continue; }
     let j = i;
     while (j < n && profile[j] < GUTTER_MAX_DESIGN) j++;
     const last = runs[runs.length - 1];
-    if (last && i - last[1] <= 3) last[1] = j; else runs.push([i, j]);
+    if (last && i - last[1] <= 3) { last[1] = j; last[2] = true; } else runs.push([i, j, false]);
     i = j;
   }
   const minCell = 0.15 * n, minRun = Math.max(2, 0.01 * n);
   const centres: number[] = [];
-  for (const [a, b] of runs) {
-    if (a === 0 || b === n || b - a < minRun) continue;
+  for (const [a, b, perforated] of runs) {
+    if (!perforated || a === 0 || b === n || b - a < minRun) continue;
     const c = Math.round((a + b) / 2);
     if (c - (centres[centres.length - 1] ?? 0) >= minCell && n - c >= minCell) centres.push(c);
   }
@@ -299,10 +356,11 @@ function toOriginal(b: Box, scale: number, img: { width: number; height: number 
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
-function dropContained(boxes: Box[]): Box[] {
+/** Drop boxes ≥ 90% inside a bigger box. An unresolved blob's box never swallows other items. */
+function dropContained<T extends Found>(boxes: T[]): T[] {
   return boxes.filter((a, i) =>
     !boxes.some((b, j) => {
-      if (i === j || b.w * b.h < a.w * a.h) return false;
+      if (i === j || b.unresolved || b.w * b.h < a.w * a.h) return false;
       const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
       const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
       return (ix * iy) / (a.w * a.h) >= CONTAINED && (b.w * b.h > a.w * a.h || j < i);
@@ -315,13 +373,14 @@ function median(v: number[]): number {
   return s[s.length >> 1];
 }
 
-function classify(boxes: Box[]): Detected[] {
-  if (boxes.length === 0) return [];
-  const ref = median(boxes.map((b) => b.w * b.h));
-  return boxes.map((box) => {
-    const aspect = Math.max(box.w, box.h) / Math.min(box.w, box.h);
-    const kind: ItemKind = box.w * box.h >= SHEET_AREA * ref && aspect <= 2.6 ? 'sheet' : 'single';
-    return { box, kind, inner: [] };
+function classify(found: Found[], imageArea: number): Detected[] {
+  if (found.length === 0) return [];
+  const ref = median(found.filter((b) => !b.unresolved).map((b) => b.w * b.h));
+  return found.map(({ unresolved, ...box }) => {
+    const area = box.w * box.h, aspect = Math.max(box.w, box.h) / Math.min(box.w, box.h);
+    const large = area >= SHEET_AREA * ref || area >= SHEET_PAGE_FRACTION * imageArea;
+    const kind: ItemKind = !unresolved && large && aspect <= 2.6 ? 'sheet' : 'single';
+    return unresolved ? { box, kind, inner: [], unresolved: true } : { box, kind, inner: [] };
   });
 }
 

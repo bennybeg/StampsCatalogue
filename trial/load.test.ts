@@ -25,3 +25,19 @@ describe('loadImage', () => {
     expect([back.width, back.height]).toEqual([30, 20]);
   });
 });
+
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { detectPages } from './detect-pages';
+
+describe('detectPages', () => {
+  it('I-6: skips files it cannot decode instead of aborting the run', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stamps-'));
+    const pages = join(dir, 'pages');
+    mkdirSync(pages);
+    await sharp({ create: { width: 300, height: 400, channels: 3, background: '#37373a' } }).jpeg().toFile(join(pages, 'a.jpg'));
+    writeFileSync(join(pages, 'b.jpg'), 'not an image');
+    const entries = await detectPages(pages, join(dir, 'out'));
+    expect(entries.every((e) => e.page === 'a')).toBe(true);
+    expect(existsSync(join(dir, 'out', 'crops', 'index.json'))).toBe(true);
+  });
+});

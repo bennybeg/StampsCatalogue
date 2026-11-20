@@ -12,7 +12,9 @@ import { loadImage, saveImage } from './load';
 
 export const PAGES_DIR = 'test-photos/pages';
 export const OUT = 'trial-output';
-export const IMAGE_EXT = /\.(jpe?g|png|webp|heic|heif|tiff?)$/i;
+const OUT_DEFAULT = OUT;
+/** HEIC is not decodable by the bundled sharp; convert iPhone photos to JPEG first. */
+export const IMAGE_EXT = /\.(jpe?g|png|webp|tiff?)$/i;
 
 export type CropEntry = {
   id: string; file: string; page: string; index: string;
@@ -33,14 +35,22 @@ function overlay(items: Detected[], scale: number, w: number, h: number): string
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">${parts.join('')}</svg>`;
 }
 
-export async function detectPages(): Promise<CropEntry[]> {
-  if (!existsSync(PAGES_DIR)) throw new Error(`Put album page photos in ${PAGES_DIR}/`);
-  const files = readdirSync(PAGES_DIR).filter((f) => IMAGE_EXT.test(f)).sort();
+export async function detectPages(pagesDir = PAGES_DIR, OUT = OUT_DEFAULT): Promise<CropEntry[]> {
+  if (!existsSync(pagesDir)) throw new Error(`Put album page photos in ${pagesDir}/`);
+  const all = readdirSync(pagesDir);
+  for (const f of all.filter((f) => /\.(heic|heif)$/i.test(f))) console.warn(`skipping ${f}: convert HEIC to JPEG first`);
+  const files = all.filter((f) => IMAGE_EXT.test(f)).sort();
   const entries: CropEntry[] = [];
   mkdirSync(join(OUT, 'crops'), { recursive: true });
   for (const f of files) {
     const name = parse(f).name;
-    const img = await loadImage(join(PAGES_DIR, f));
+    let img;
+    try {
+      img = await loadImage(join(pagesDir, f));
+    } catch (e) {
+      console.warn(`skipping ${f}: ${(e as Error).message}`);
+      continue;
+    }
     const t0 = performance.now();
     const items = await detectItems(img);
     const ms = Math.round(performance.now() - t0);
