@@ -31,4 +31,11 @@ export const en: Record<keyof typeof ru, string> = {
   nextPage: 'Next page',
   home: 'Home',
   errorPrefix: 'Error: {msg}',
+  edgesDiffer: 'Edges differ: one stamp is perforated, the other is not',
+  zoomEdges: 'Edges',
+  zoomFit: 'Whole',
+  sameStamp: 'This is the same stamp',
+  close: 'Close',
+  yourPhoto: 'Your photo',
+  inCollection: 'In the collection',
 };

@@ -38,3 +38,8 @@ label { display: flex; flex-direction: column; gap: 4px; }
 .thumb { width: 72px; height: 72px; object-fit: contain; background: #0002; border-radius: 8px; }
 .proposal { flex-direction: row; align-items: center; gap: 10px; }
 .banner.ok { background: #dff3e4; color: #0f4d22; }
+.compare { position: fixed; inset: 0; background: var(--bg); z-index: 10; display: flex; flex-direction: column; gap: 8px; padding: 12px; overflow: auto; }
+.compare-pane { margin: 0; flex: 1; min-height: 0; display: flex; flex-direction: column; touch-action: none; }
+.compare-pane figcaption { color: var(--muted); font-size: 0.9rem; }
+.compare-clip { flex: 1; overflow: hidden; border-radius: 10px; background: #0003; }
+.compare-clip img { width: 100%; height: 100%; object-fit: contain; display: block; }

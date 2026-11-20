@@ -79,3 +79,19 @@ export function withPostmark(img: RgbaImage, fraction: number): RgbaImage {
       }
   return out;
 }
+
+/** A stamp whose edges have semicircular perforation notches (page colour) every 2×toothPx. */
+export function drawPerforatedStamp(img: RgbaImage, box: Box, design: Rgb = [40, 70, 160], toothPx = 8, bg: Rgb = PAGE_BG): void {
+  drawStamp(img, box, design);
+  const r = toothPx / 2;
+  const notch = (cx: number, cy: number) => {
+    for (let y = Math.floor(cy - r); y <= cy + r; y++)
+      for (let x = Math.floor(cx - r); x <= cx + r; x++)
+        if (x >= 0 && y >= 0 && x < img.width && y < img.height && Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= r) {
+          const i = (y * img.width + x) * 4;
+          img.data[i] = bg[0]; img.data[i + 1] = bg[1]; img.data[i + 2] = bg[2];
+        }
+  };
+  for (let x = box.x + toothPx; x < box.x + box.w - toothPx / 2; x += 2 * toothPx) { notch(x, box.y); notch(x, box.y + box.h); }
+  for (let y = box.y + toothPx; y < box.y + box.h - toothPx / 2; y += 2 * toothPx) { notch(box.x, y); notch(box.x + box.w, y); }
+}

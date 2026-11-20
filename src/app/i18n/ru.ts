@@ -30,4 +30,11 @@ export const ru = {
   nextPage: 'Следующая страница',
   home: 'На главную',
   errorPrefix: 'Ошибка: {msg}',
+  edgesDiffer: 'Края отличаются: у одной марки зубцы, у другой — нет',
+  zoomEdges: 'Края',
+  zoomFit: 'Целиком',
+  sameStamp: 'Это та же марка',
+  close: 'Закрыть',
+  yourPhoto: 'Ваше фото',
+  inCollection: 'В коллекции',
 };
