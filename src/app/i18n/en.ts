@@ -81,4 +81,6 @@ export const en: Record<keyof typeof ru, string> = {
   errorGeneric: 'Something went wrong. Please try again.',
   proposalCopy: 'Another copy of this stamp',
   working: 'One moment…',
+  move: 'Move',
+  moveTitle: 'Move to another place',
 };

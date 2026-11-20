@@ -53,6 +53,22 @@ export async function updateItem(db: StampDb, id: string, patch: Partial<Omit<It
   await tx.done;
 }
 
+/**
+ * Move a stamp (and the stamps inside a block/sheet/cover) to another album page. Its position on the
+ * old page photo is dropped: the next photo of the new page will place it again.
+ */
+export async function moveItem(db: StampDb, id: string, album: number, page: number): Promise<void> {
+  const tx = db.transaction('items', 'readwrite');
+  const ids = [id, ...(await tx.store.index('byParent').getAllKeys(id))];
+  for (const k of ids) {
+    const cur = await tx.store.get(k);
+    if (!cur) continue;
+    const { pos: _old, ...rest } = cur;
+    await tx.store.put({ ...rest, album, page });
+  }
+  await tx.done;
+}
+
 export async function deleteItem(db: StampDb, id: string): Promise<void> {
   const tx = db.transaction('items', 'readwrite');
   for (const childKey of await tx.store.index('byParent').getAllKeys(id)) await tx.store.delete(childKey);

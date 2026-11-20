@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   openStampDb, putItems, deleteItem, getItem, listByPage, countUnfiled, listUnfiled, listAlbums,
-  loadIndex, groupStats, getMeta, updateItem, childrenOf, type StampDb,
+  loadIndex, groupStats, getMeta, updateItem, childrenOf, moveItem, type StampDb,
 } from './db';
 import type { Item } from './types';
 
@@ -71,6 +71,18 @@ describe('stamp db', () => {
     const block = item({ kind: 'block' });
     await putItems(db, [block, item(), item({ parentId: block.id })]);
     expect((await getMeta(db)).addedSinceBackup).toBe(2);
+  });
+
+  it('moves a stamp with the stamps inside it to another album page', async () => {
+    const block = item({ kind: 'block', album: 1, page: 2, pos: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } });
+    const inner = item({ parentId: block.id, album: 1, page: 2, pos: { x: 0.1, y: 0.1, w: 0.1, h: 0.1 } });
+    await putItems(db, [block, inner]);
+    await moveItem(db, block.id, 5, 9);
+    expect(await listByPage(db, 1, 2)).toHaveLength(0);
+    expect(await listByPage(db, 5, 9)).toHaveLength(1);
+    const [b, i] = [await getItem(db, block.id), await getItem(db, inner.id)];
+    expect([i!.album, i!.page]).toEqual([5, 9]);
+    expect(b!.pos).toBeUndefined(); // its spot on the old page photo means nothing on the new page
   });
 
   it('updates fields and files an unfiled item', async () => {

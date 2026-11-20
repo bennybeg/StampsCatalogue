@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ItemKind } from '../../core/detect';
-import { childrenOf, deleteItem, getItem, groupStats, updateItem } from '../../db/db';
+import { childrenOf, deleteItem, getItem, groupStats, moveItem, updateItem } from '../../db/db';
+import { parsePageNumber } from '../savePage';
 import { BlobImg } from '../components/BlobImg';
 import { useT, type Key } from '../i18n';
 import { useServices } from '../services';
@@ -15,6 +16,9 @@ export function ItemDetail({ go, id }: { go(path: string): void; id: string }) {
   const { t } = useT();
   const svc = useServices();
   const [confirming, setConfirming] = useState(false);
+  const [albumText, setAlbumText] = useState('');
+  const [pageText, setPageText] = useState('');
+  const toAlbum = parsePageNumber(albumText), toPage = parsePageNumber(pageText);
   const { value, reload } = useAsync(async () => {
     const db = await svc.getDb();
     const item = await getItem(db, id);
@@ -35,6 +39,16 @@ export function ItemDetail({ go, id }: { go(path: string): void; id: string }) {
         {item.album !== undefined ? t('whereAlbum', { album: item.album, page: item.page ?? '' }) : t('whereUnfiled')}
         {' · '}{t('copiesTotal', { n: stats.copies })}
       </p>
+      <h2>{t('moveTitle')}</h2>
+      <div className="row">
+        <label>{t('albumLabel')}<input inputMode="numeric" aria-label={t('albumLabel')} value={albumText} placeholder={item.album !== undefined ? String(item.album) : ''} onChange={(e) => setAlbumText(e.target.value)} /></label>
+        <label>{t('pageLabel')}<input inputMode="numeric" aria-label={t('pageLabel')} value={pageText} placeholder={item.page !== undefined ? String(item.page) : ''} onChange={(e) => setPageText(e.target.value)} /></label>
+      </div>
+      <button disabled={toAlbum === null || toPage === null} onClick={async () => {
+        await moveItem(await svc.getDb(), id, toAlbum!, toPage!);
+        setAlbumText(''); setPageText('');
+        reload();
+      }}>{t('move')}</button>
       <label>{t('kind')}
         <select value={item.kind} onChange={(e) => patch({ kind: e.target.value as ItemKind })}>
           {KINDS.map((k) => <option key={k.kind} value={k.kind}>{t(k.label)}</option>)}

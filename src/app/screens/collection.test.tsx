@@ -74,4 +74,14 @@ describe('ItemDetail', () => {
     expect(await getItem(db, 'in')).toBeUndefined();
     expect(go).toHaveBeenCalled();
   });
+
+  it('moves a stamp to another album and page', async () => {
+    const db = await withDb([item('a', { album: 1, page: 1 })], <ItemDetail go={() => {}} id="a" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: ru.move })).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(ru.albumLabel), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText(ru.pageLabel), { target: { value: ' 07' } });
+    fireEvent.click(screen.getByRole('button', { name: ru.move }));
+    await waitFor(async () => expect(await listByPage(db, 2, 7)).toHaveLength(1));
+    expect(await listByPage(db, 1, 1)).toHaveLength(0);
+  });
 });
