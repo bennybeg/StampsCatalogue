@@ -1,6 +1,7 @@
 import type { Handlers, Reply, Request } from './handlers';
 
-export type Recognizer = Handlers;
+/** quickDetect is optional so simple fakes need not implement it; callers fall back to detect. */
+export type Recognizer = Omit<Handlers, 'quickDetect'> & { quickDetect?: Handlers['quickDetect'] };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Port = { postMessage(m: unknown): void; onmessage: ((e: MessageEvent) => void) | null; onerror?: any; onmessageerror?: any };
 
@@ -40,6 +41,7 @@ export function createRecognizer(port: Port, opts: { onDead?(): void; timeoutMs?
     });
   return {
     detect: call('detect'),
+    quickDetect: call('quickDetect'),
     snap: call('snap'),
     describe: call('describe'),
     warmUp: call('warmUp'),

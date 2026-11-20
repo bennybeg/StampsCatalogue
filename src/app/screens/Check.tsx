@@ -17,7 +17,7 @@ export const COLOR_WEIGHT = 0.5;
 type Query = { img: RgbaImage; look: { embedding: Float32Array; color: Float32Array } };
 type Step =
   | { s: 'start' }
-  | { s: 'working' }
+  | { s: 'working'; pct?: number }
   | { s: 'pick'; photo: RgbaImage; url: string; boxes: EditBox[] }
   | { s: 'results'; q: Query; rows: MatchRow[] }
   | { s: 'added' }
@@ -58,7 +58,11 @@ export function Check({ go }: { go(path: string): void }) {
     try {
       setStep({ s: 'working' });
       const photo = await svc.decode(file);
-      const found = (await svc.recognizer.detect(photo)).filter((d) => !d.unresolved);
+      // At the club speed matters: the quick detector usually finds a close-up stamp at once;
+      // the full SlimSAM search (20–40 s on a phone) runs only when it finds nothing.
+      const quick = svc.recognizer.quickDetect ? (await svc.recognizer.quickDetect(photo)).filter((d) => !d.unresolved) : [];
+      const found = quick.length ? quick
+        : (await svc.recognizer.detect(photo, (f) => setStep({ s: 'working', pct: Math.round(f * 100) }))).filter((d) => !d.unresolved);
       if (found.length > 1)
         return setStep({ s: 'pick', photo, url: URL.createObjectURL(file), boxes: found.map((d, i) => ({ key: String(i), box: d.box, kind: d.kind, inner: d.inner })) });
       await search(photo, found[0]?.box ?? null);
@@ -114,7 +118,7 @@ export function Check({ go }: { go(path: string): void }) {
           </label>
         </>
       )}
-      {step.s === 'working' && <p>{t('findingStamps')}</p>}
+      {step.s === 'working' && <p>{step.pct !== undefined ? t('findingStampsPct', { pct: step.pct }) : t('findingStamps')}</p>}
       {step.s === 'pick' && (
         <>
           <p>{t('pickStamp')}</p>
@@ -140,7 +144,7 @@ export function Check({ go }: { go(path: string): void }) {
           <button className="big primary" disabled={busy} onClick={() => add(step.q)}>{t('addToCollection')}</button>
           <label className="big button">
             {t('checkAnother')}
-            <input type="file" accept="image/*" capture="environment" hidden onChange={(e) => onFile(e.target.files?.[0])} />
+            <input type="file" accept="image/*" capture="environment" hidden aria-label={t('takePhoto')} onChange={(e) => onFile(e.target.files?.[0])} />
           </label>
           {compare && queryBlob && (
             <CompareView left={queryBlob} right={compare.item.image} edgesDiffer={differ}

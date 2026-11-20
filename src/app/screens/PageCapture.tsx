@@ -10,7 +10,7 @@ import { BlobImg } from '../components/BlobImg';
 
 type Step =
   | { s: 'form' }
-  | { s: 'detecting' }
+  | { s: 'detecting'; pct: number }
   | { s: 'editing' }
   | { s: 'describing'; done: number; total: number }
   | { s: 'confirm'; cands: CandidateWithCrops[]; proposals: Proposal[]; known: Map<string, Blob> }
@@ -39,17 +39,23 @@ export function PageCapture({ go }: { go(path: string): void }) {
 
   useEffect(() => () => { if (photoUrl) URL.revokeObjectURL(photoUrl); }, [photoUrl]);
 
+  const runRef = useRef(0);
   const onFile = async (file: File | undefined) => {
     if (!file) return;
-    setStep({ s: 'detecting' });
+    const run = ++runRef.current; // a newer photo makes this run's results stale
+    const current = () => run === runRef.current;
+    setStep({ s: 'detecting', pct: 0 });
     try {
       const img = await svc.decode(file);
+      if (!current()) return;
+      const found = await svc.recognizer.detect(img, (f) => { if (current()) setStep({ s: 'detecting', pct: Math.round(f * 100) }); });
+      if (!current()) return;
       setPhoto(img);
       setPhotoUrl(URL.createObjectURL(file));
-      const found = await svc.recognizer.detect(img);
       setBoxes(found.map((d, i) => ({ key: String(i), box: d.box, kind: d.kind, inner: d.inner, unresolved: d.unresolved })));
       setStep({ s: 'editing' });
     } catch (e) {
+      if (!current()) return;
       console.error(e);
       setStep({ s: 'error', msg: t('errorGeneric') });
     }
@@ -121,7 +127,7 @@ export function PageCapture({ go }: { go(path: string): void }) {
             <input type="file" accept="image/*" capture="environment" hidden aria-label={t('takePhoto')}
               disabled={album === null || page === null} onChange={(e) => onFile(e.target.files?.[0])} />
           </label>
-          {step.s === 'detecting' && <p>{t('findingStamps')}</p>}
+          {step.s === 'detecting' && <p>{t('findingStampsPct', { pct: step.pct })}</p>}
         </>
       )}
       {step.s === 'editing' && photo && (

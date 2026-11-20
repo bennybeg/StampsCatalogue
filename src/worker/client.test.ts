@@ -15,6 +15,7 @@ const base = {
   snap: async () => null,
   describe: async () => ({ embedding: new Float32Array(3), color: new Float32Array(72) }),
   warmUp: async () => {},
+  quickDetect: async () => [],
 };
 
 describe('recognizer RPC', () => {

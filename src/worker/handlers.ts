@@ -11,6 +11,8 @@ export const MODEL_ID = 'Xenova/dinov2-small';
 
 export type Handlers = {
   detect(img: RgbaImage, onProgress?: (fraction: number) => void): Promise<Detected[]>;
+  /** Classical detector only: a fraction of a second, for club photos of one or two stamps. */
+  quickDetect(img: RgbaImage): Promise<Detected[]>;
   snap(img: RgbaImage, x: number, y: number): Promise<Box | null>;
   describe(img: RgbaImage): Promise<{ embedding: Float32Array; color: Float32Array }>;
   warmUp(): Promise<void>;
@@ -43,6 +45,7 @@ export function makeHandlers(d: Deps): Handlers {
         return classical;
       }
     },
+    quickDetect: (img) => d.detectItems(img),
     async snap(img, x, y) {
       const b = await d.samBoxAt(img, x, y).catch(() => null);
       return b ?? d.snapBoxAt(img, x, y);

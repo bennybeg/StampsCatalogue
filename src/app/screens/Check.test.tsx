@@ -74,4 +74,24 @@ describe('Check', () => {
     fireEvent.click(screen.getByTestId('box-0'));
     await waitFor(() => expect(screen.getByText(ru.errorGeneric)).toBeTruthy());
   });
+
+  it('uses the quick detector at the club and the full search only when it finds nothing', async () => {
+    const db = await openStampDb(`checkq${Math.random()}`);
+    await putItems(db, [{ id: 's', kind: 'single', groupId: 's', forTrade: false, album: 1, page: 1, image: new Blob(['i']), thumb: new Blob(['t']), embedding: unit(2), color: new Float32Array(72), createdAt: 1 }]);
+    const calls: string[] = [];
+    const recognizer = {
+      quickDetect: async () => { calls.push('quick'); return calls.length === 1 ? one : []; },
+      detect: async () => { calls.push('full'); return one; },
+      snap: async () => null, warmUp: async () => {},
+      describe: async () => ({ embedding: unit(2), color: new Float32Array(72) }),
+    } as Recognizer;
+    const services: Services = { getDb: async () => db, recognizer,
+      decode: async () => ({ width: 100, height: 100, data: new Uint8ClampedArray(40000) }), encode: async () => new Blob(['jpg']) };
+    render(<I18nProvider><ServicesProvider value={services}><Check go={() => {}} /></ServicesProvider></I18nProvider>);
+    fireEvent.change(screen.getByLabelText(ru.takePhoto), { target: { files: [new File(['x'], 'q.jpg')] } });
+    await waitFor(() => expect(screen.getAllByTestId('match-row')).toHaveLength(1));
+    expect(calls).toEqual(['quick']);
+    fireEvent.change(screen.getAllByLabelText(ru.takePhoto)[0], { target: { files: [new File(['y'], 'r.jpg')] } });
+    await waitFor(() => expect(calls).toEqual(['quick', 'quick', 'full']));
+  });
 });

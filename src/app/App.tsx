@@ -25,6 +25,7 @@ function realServices(): Services {
     getDb: () => (db ??= openStampDb()),
     recognizer: {
       detect: (...a) => lazyRec().detect(...a),
+      quickDetect: (...a) => lazyRec().quickDetect!(...a),
       snap: (...a) => lazyRec().snap(...a),
       describe: (...a) => lazyRec().describe(...a),
       warmUp: () => lazyRec().warmUp(),
